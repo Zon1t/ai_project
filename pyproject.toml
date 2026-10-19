@@ -1,0 +1,20 @@
+[project]
+name = "sr-agent"
+version = "0.1.0"
+description = "변경 요청(SR) 처리 에이전트"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-m 'not llm' -p no:cacheprovider"
+markers = ["llm: LLM API를 호출하는 테스트 (비용 발생, `pytest -m llm`으로만 실행)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src"]
+extend-exclude = ["target", "_build", "runs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

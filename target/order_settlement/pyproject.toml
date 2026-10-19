@@ -1,0 +1,10 @@
+[project]
+name = "order-settlement"
+version = "1.4.2"
+description = "주문·정산 시스템 (가상 레거시)"
+requires-python = ">=3.8"
+dependencies = ["pytz"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

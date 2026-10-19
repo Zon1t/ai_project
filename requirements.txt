@@ -1,0 +1,29 @@
+# Python 3.12 기준. 직접 의존성만 고정한다 (CLAUDE.md 기술 스택).
+
+# LLM (키는 .env의 OPENAI_API_KEY)
+openai==3.35.1
+pydantic==2.14.1
+python-dotenv==1.2.4
+
+# ML/DL
+xgboost==3.4.1
+scikit-learn==1.9.1
+sentence-transformers==6.1.0
+shap==0.54.1
+
+# 테스트·공격
+pytest==9.1.1
+coverage==7.16.2
+hypothesis==6.170.2
+
+# 검사
+ruff==0.17.1
+bandit==1.9.4
+
+# 벡터 저장소·UI
+chromadb==1.5.9
+streamlit==1.66.0
+
+# 대상 프로젝트(target/) 실행·S2 노후화 대응
+pytz==2026.5
+tzdata==2026.5

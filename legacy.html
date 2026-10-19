@@ -1,0 +1,644 @@
+<title>레거시 전환 에이전트 아키텍처</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: 기획서 4장(①~④)을 그대로 옮긴 단일 컬럼 초안. 표와 다이어그램 중심. */
+:root {
+  --bg: #f5f7f6;
+  --surface: #ffffff;
+  --lane: #ecf0ee;
+  --ink: #16201c;
+  --muted: #5a6762;
+  --line: #cdd6d2;
+  --agent: #0d6b60;
+  --agent-soft: #dcefea;
+  --know: #94640c;
+  --know-soft: #f6ead2;
+  --ml: #6a3d9e;
+  --ml-soft: #ece3f6;
+  --fail: #c03f0b;
+  --fail-soft: #fce6db;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101513; --surface: #19201d; --lane: #151b19; --ink: #e5ece9; --muted: #9baba5;
+    --line: #33403b; --agent: #52c4b2; --agent-soft: #173833; --know: #e2b45c; --know-soft: #392d16;
+    --ml: #bb98e8; --ml-soft: #2c2340; --fail: #fb8b5b; --fail-soft: #3d2217; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101513; --surface: #19201d; --lane: #151b19; --ink: #e5ece9; --muted: #9baba5;
+  --line: #33403b; --agent: #52c4b2; --agent-soft: #173833; --know: #e2b45c; --know-soft: #392d16;
+  --ml: #bb98e8; --ml-soft: #2c2340; --fail: #fb8b5b; --fail-soft: #3d2217; color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.65; }
+.wrap {
+  max-width: 1120px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+  display: grid; gap: 60px;
+}
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.3; }
+h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 21px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--agent); text-transform: uppercase; }
+header { display: grid; gap: 14px; }
+.lead { color: var(--muted); font-size: 16px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; color: var(--muted); }
+.meta b { color: var(--ink); font-weight: 600; }
+.reqs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.req { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 2px; min-width: 0; font-size: 13.5px; }
+.req b { font-size: 12px; color: var(--agent); font-family: var(--mono); letter-spacing: 0.04em; }
+
+.slide { display: grid; gap: 22px; }
+.slide-head { display: grid; gap: 6px; padding-top: 18px; border-top: 2px solid var(--ink); }
+.slide-no { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.06em; }
+.slide-head p { color: var(--muted); }
+.block { display: grid; gap: 12px; }
+.note { font-size: 13.5px; color: var(--muted); }
+.assume { font-size: 12px; color: var(--know); font-weight: 600; }
+
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel ul, .panel ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+.panel.after { border-color: var(--agent); background: var(--agent-soft); }
+.oneline { font-size: 17px; font-weight: 600; padding: 14px 18px; border-left: 4px solid var(--agent); background: var(--surface); border-radius: 0 10px 10px 0; max-width: none; }
+.flowline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13.5px; }
+.flowline span { padding: 4px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); }
+.flowline span.pain { border-color: var(--fail); background: var(--fail-soft); }
+.flowline i { font-style: normal; color: var(--muted); }
+
+.diagram { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.diagram svg { display: block; width: 100%; min-width: 960px; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 26px; height: 0; border-top: 2px solid var(--muted); display: inline-block; }
+.sw.f { border-color: var(--fail); }
+.tag { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; }
+.tag.a { color: var(--agent); } .tag.k { color: var(--know); } .tag.m { color: var(--ml); } .tag.t { color: var(--muted); }
+
+/* SVG */
+.band { fill: var(--lane); }
+.band-t { fill: var(--ink); font: 700 13px var(--sans); }
+.band-s { fill: var(--muted); font: 400 11px var(--sans); }
+.bx { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.bx.k { stroke: var(--know); } .bx.a { stroke: var(--agent); } .bx.m { stroke: var(--ml); }
+.bx.ui { fill: var(--agent-soft); stroke: var(--agent); }
+.bx.h { fill: var(--fail-soft); stroke: var(--fail); }
+.tt { fill: var(--ink); font: 600 14px var(--sans); text-anchor: middle; }
+.tg { fill: var(--ink); font: 700 13px var(--sans); }
+.tn { fill: var(--ink); font: 600 12px var(--mono); }
+.ss { fill: var(--muted); font: 400 11.5px var(--sans); text-anchor: middle; }
+.bd { font: 600 9.5px var(--mono); letter-spacing: 0.08em; }
+.bd.a { fill: var(--agent); } .bd.k { fill: var(--know); } .bd.m { fill: var(--ml); } .bd.t { fill: var(--muted); } .bd.f { fill: var(--fail); }
+.bd.r { text-anchor: end; }
+.ln { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.ln.f { stroke: var(--fail); stroke-width: 1.9; }
+.lb { fill: var(--muted); font: 500 10.5px var(--sans); text-anchor: middle; }
+.lb.s { text-anchor: start; } .lb.e { text-anchor: end; }
+.lb.f { fill: var(--fail); font-weight: 600; }
+.mk { fill: var(--muted); } .mk.f { fill: var(--fail); }
+
+/* Tables */
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 680px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--lane); letter-spacing: 0.02em; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; }
+td code, p code, li code { font-family: var(--mono); font-size: 12.5px; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.must { background: var(--agent-soft); color: var(--agent); }
+.pill.nice { background: var(--lane); color: var(--muted); }
+
+/* Wireframe */
+.wire { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 12px; background: var(--surface); border: 1.5px dashed var(--muted); border-radius: 12px; padding: 14px; font-size: 13px; }
+.wire .side, .wire .main { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.wf { border: 1.5px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg); min-width: 0; }
+.wf b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+.tlist { display: grid; gap: 4px; }
+.tlist div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px; border-radius: 4px; }
+.tlist div.on { background: var(--agent-soft); color: var(--agent); font-weight: 600; }
+.tlist small { color: var(--muted); }
+.kpis3 { display: grid; gap: 8px; }
+.kpis3 .wf { display: flex; justify-content: space-between; align-items: baseline; }
+.kpis3 .wf b { margin: 0; }
+.kpis3 .wf span { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.steps { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
+.steps span { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); }
+.steps span.done { background: var(--agent-soft); border-color: var(--agent); color: var(--agent); }
+.steps span.now { background: var(--fail-soft); border-color: var(--fail); color: var(--fail); font-weight: 600; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabs span { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); font-size: 12.5px; }
+.tabs span.on { border-color: var(--agent); color: var(--agent); font-weight: 600; }
+.rank { display: grid; gap: 6px; }
+.rank div { display: grid; grid-template-columns: 22px minmax(0, 1fr) 54px; gap: 8px; align-items: center; font-family: var(--mono); font-size: 12px; }
+.rank .bar { height: 6px; border-radius: 3px; background: var(--ml); }
+.btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.btns span { padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 13px; border: 1.5px solid var(--line); }
+.btns span.ok { background: var(--agent); color: var(--surface); border-color: var(--agent); }
+
+/* Scenarios */
+.scen { display: grid; gap: 12px; }
+.sc { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 8px; min-width: 0; }
+.sc .ticket { font-size: 13.5px; background: var(--lane); border-radius: 6px; padding: 8px 12px; }
+.sc .flow { font-family: var(--mono); font-size: 12.5px; color: var(--agent); overflow-wrap: anywhere; }
+.sc .res { font-size: 14px; }
+.sc .res b { font-weight: 600; }
+
+@media (max-width: 760px) {
+  .reqs { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .wire { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">AI Agent 프로젝트 기획서 · 초안</div>
+  <h1>변경 요청 처리 에이전트</h1>
+  <p class="lead">결함 위치를 예측하고, 고친 코드를 스스로 공격해 검증하는 유지보수 코드 수정 에이전트</p>
+  <div class="meta">
+    <span><b>작성자</b> (이름 기입)</span>
+    <span><b>제출 파일명</b> 성명_변경요청처리에이전트_기획서.pptx</span>
+    <span><b>데이터</b> 가상 생성 + 공개 가이드 요약</span>
+  </div>
+  <div class="reqs">
+    <div class="req"><b>① 현업 연계</b>SI·ITO 운영 조직의 SR 처리</div>
+    <div class="req"><b>② ML/DL</b>결함 위치 예측 (DL 임베딩 + ML 순위)</div>
+    <div class="req"><b>③ Tool 호출</b>분석 에이전트가 예측 모델을 도구로 호출</div>
+    <div class="req"><b>④ 화면</b>Streamlit 티켓 처리·승인 화면</div>
+  </div>
+</header>
+
+<!-- ① -->
+<section class="slide">
+  <div class="slide-head">
+    <div class="slide-no">① 프로젝트 개요 · 현 문제점</div>
+    <h2>SR 한 건을 처리하는 데 시간이 어디에 쓰이는가</h2>
+  </div>
+  <div class="cols">
+    <div class="panel">
+      <h3>대상 업무와 사용자</h3>
+      <ul>
+        <li><b>사용자</b>: 운영 중인 업무 시스템을 유지보수하는 SI·ITO 개발자</li>
+        <li><b>대상 업무</b>: 변경 요청(SR) 처리. MVP는 세 유형만 다룹니다.
+          <ul>
+            <li><b>결함 수정</b>: 장애 리포트를 보고 원인을 찾아 고침</li>
+            <li><b>노후화 대응</b>: 지원 종료 API를 최신 API로 교체</li>
+            <li><b>보안 진단 조치</b>: 시큐어코딩 진단 지적 사항 수정</li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>현업의 문제점</h3>
+      <ul>
+        <li>결함 원인 위치를 찾느라 로그·코드 검색에 SR당 <b>1~2시간</b></li>
+        <li>수정 후 <b>회귀 결함</b>: 고치면서 다른 동작을 깨뜨림</li>
+        <li>사내 규칙과 과거 유사 장애 조치 이력을 <b>사람이 직접</b> 찾아 대조</li>
+      </ul>
+      <p class="assume">수치는 가정치입니다. 근거를 확인한 뒤 교체하세요.</p>
+    </div>
+  </div>
+  <div class="block">
+    <h3>현재 업무 흐름</h3>
+    <div class="flowline">
+      <span>티켓 접수</span><i>→</i>
+      <span class="pain">원인 위치 탐색</span><i>→</i>
+      <span>코드 수정</span><i>→</i>
+      <span class="pain">테스트 작성 · 회귀 확인</span><i>→</i>
+      <span class="pain">규칙 · 이력 대조</span><i>→</i>
+      <span>승인 · 배포</span>
+    </div>
+    <p class="note">붉은 단계가 시간이 많이 들거나 결함이 새는 구간입니다.</p>
+  </div>
+</section>
+
+<!-- ② -->
+<section class="slide">
+  <div class="slide-head">
+    <div class="slide-no">② 개선 방향 · 기대 효과</div>
+    <h2>해결 아이디어</h2>
+  </div>
+  <p class="oneline">티켓을 받으면 모델이 고칠 위치를 좁히고, 에이전트가 이력·규칙을 근거로 수정한 뒤, 공격 에이전트가 수정 미달과 회귀를 찾아낼 때까지 검증한다.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>단계</th><th>Before</th><th>After</th></tr></thead>
+      <tbody>
+        <tr><td>원인 위치</td><td>로그·코드를 사람이 검색</td><td>결함 위치 예측 모델이 함수 Top-3와 예측 근거(SHAP) 제시</td></tr>
+        <tr><td>수정</td><td>개인 경험에 의존</td><td>유사 장애 조치 이력과 사내 규칙을 검색해 근거와 함께 패치</td></tr>
+        <tr><td>검증</td><td>테스트 수작업 작성, 회귀는 통합 테스트에서 발견</td><td>재현 테스트 자동 작성 + 공격 에이전트가 LLM 설계 입력과 Hypothesis 속성 기반 입력으로 미달·회귀 탐색</td></tr>
+        <tr><td>승인</td><td>리뷰어가 전부 확인</td><td>검증 결과·근거를 한 화면에서 보고 승인</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>역할</th><th>담당</th><th>하는 일</th></tr></thead>
+      <tbody>
+        <tr><td>ML/DL 모델</td><td>결함 위치 예측</td><td>티켓과 메서드의 관련도를 계산해 수정 후보 순위 매기기</td></tr>
+        <tr><td>AI Agent</td><td>분석 · 수정 · 공격 에이전트</td><td>도구 호출, 재현 테스트 작성, 패치 생성, 공격 입력 설계</td></tr>
+        <tr><td>결정적 코드</td><td>판정 노드 · 실행 도구</td><td>빌드·테스트 실행, 출력 비교, 유형별 통과 판정 (LLM이 판단하지 않음)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>정량 목표</th><th>현재</th><th>목표</th><th>측정 방법</th></tr></thead>
+      <tbody>
+        <tr><td>결함 위치 Top-3 정확도</td><td class="num">-</td><td class="num">0.80 이상</td><td>홀드아웃 티켓, TF-IDF 베이스라인과 비교</td></tr>
+        <tr><td>SR당 처리 시간</td><td class="num">2시간</td><td class="num">15분</td><td>시연 티켓의 접수~승인 요청까지 시간</td></tr>
+        <tr><td>공격 에이전트 탐지율</td><td class="num">-</td><td class="num">80% 이상</td><td>일부러 불완전하게 만든 패치 10건 중 미달·회귀 탐지 수</td></tr>
+        <tr><td>근거 인용률</td><td class="num">-</td><td class="num">80% 이상</td><td>패치 설명에 규칙 ID·이력 ID가 포함된 비율</td></tr>
+        <tr><td>자동 검증 통과</td><td class="num">-</td><td class="num">3유형 모두</td><td>시연 시나리오 3개가 판정 노드 통과</td></tr>
+        <tr><td>E2E 해결률</td><td class="num">-</td><td class="num">60% 이상</td><td>홀드아웃 티켓 20건 중 사람 개입 없이 판정 노드를 통과한 비율</td></tr>
+        <tr><td>예측 도구 기여</td><td class="num">-</td><td class="num">해결률 향상</td><td>Ablation: <code>predict_fault_location</code> 제거 시와 해결률·토큰·소요 시간 비교</td></tr>
+        <tr><td>회귀 누출</td><td class="num">-</td><td class="num">1건 이하</td><td>Ablation: 공격 단계 유무별로 판정 통과 후 숨은 회귀 테스트에서 걸린 패치 수</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="assume">E2E 해결률 목표는 가정치입니다. 2일차 데이터셋 구축 후 난이도를 보고 조정하세요.</p>
+</section>
+
+<!-- ③ -->
+<section class="slide">
+  <div class="slide-head">
+    <div class="slide-no">③ 시스템 설계</div>
+    <h2>아키텍처</h2>
+    <p>사용자 → 화면 → Agent → 도구 → 모델·데이터. 결함 위치 예측 모델은 분석 에이전트가 호출하는 도구입니다.</p>
+  </div>
+  <div class="diagram">
+<svg viewBox="0 0 1200 610" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="변경 요청 처리 에이전트 아키텍처">
+  <defs>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="mf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk f" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="band" x="10" y="10" width="1180" height="100" rx="10"/>
+  <rect class="band" x="10" y="120" width="1180" height="200" rx="10"/>
+  <rect class="band" x="10" y="330" width="1180" height="140" rx="10"/>
+  <rect class="band" x="10" y="480" width="1180" height="120" rx="10"/>
+  <text class="band-t" x="26" y="40">사용자 · 화면</text>
+  <text class="band-s" x="26" y="58">유지보수 개발자</text>
+  <text class="band-t" x="26" y="150">AI Agent</text>
+  <text class="band-s" x="26" y="168">워크플로 그래프</text>
+  <text class="band-t" x="26" y="360">Tools</text>
+  <text class="band-s" x="26" y="378">Claude tool use</text>
+  <text class="band-t" x="26" y="510">모델 · 데이터</text>
+  <text class="band-s" x="26" y="528">가상 생성 + 공개</text>
+
+  <!-- UI -->
+  <rect class="bx ui" x="170" y="30" width="1010" height="70" rx="8"/>
+  <text class="tt" x="675" y="58">Streamlit 화면</text>
+  <text class="ss" x="675" y="80">티켓 목록 · 진행 단계 · 결함 위치 Top-3 · 근거(이력·규칙) · 패치 diff · 공격 로그 · 승인 버튼</text>
+
+  <path class="ln" d="M230 100V168" marker-end="url(#m)"/>
+  <text class="lb s" x="238" y="130">변경 요청 티켓</text>
+  <path class="ln" d="M1110 170V102" marker-end="url(#m)"/>
+  <text class="lb e" x="1102" y="130">검증 결과 · 승인 요청</text>
+
+  <!-- Agents -->
+  <rect class="bx a" x="180" y="170" width="190" height="76" rx="8"/>
+  <text class="bd a" x="192" y="186">AGENT</text>
+  <text class="tt" x="275" y="210">분석 에이전트</text>
+  <text class="ss" x="275" y="230">위치 예측 · 근거 · 재현 테스트</text>
+
+  <rect class="bx a" x="410" y="170" width="190" height="76" rx="8"/>
+  <text class="bd a" x="422" y="186">AGENT</text>
+  <text class="tt" x="505" y="210">수정 에이전트</text>
+  <text class="ss" x="505" y="230">규칙 반영 패치 · 테스트</text>
+
+  <rect class="bx a" x="640" y="170" width="190" height="76" rx="8"/>
+  <text class="bd a" x="652" y="186">AGENT</text>
+  <text class="tt" x="735" y="210">공격 에이전트</text>
+  <text class="ss" x="735" y="230">수정 미달 · 회귀 탐색</text>
+
+  <rect class="bx" x="870" y="170" width="140" height="76" rx="8"/>
+  <text class="bd t" x="882" y="186">CODE</text>
+  <text class="tt" x="940" y="210">판정 노드</text>
+  <text class="ss" x="940" y="230">유형별 통과 조건</text>
+
+  <rect class="bx h" x="1040" y="170" width="140" height="76" rx="8"/>
+  <text class="bd f" x="1052" y="186">HITL</text>
+  <text class="tt" x="1110" y="210">사람 승인</text>
+  <text class="ss" x="1110" y="230">반영 / 반려</text>
+
+  <path class="ln" d="M370 208H408" marker-end="url(#m)"/>
+  <path class="ln" d="M600 208H638" marker-end="url(#m)"/>
+  <path class="ln" d="M830 208H868" marker-end="url(#m)"/>
+  <path class="ln" d="M1010 208H1038" marker-end="url(#m)"/>
+  <text class="lb" x="1025" y="200">통과</text>
+
+  <path class="ln f" d="M940 170V150H505V168" marker-end="url(#mf)"/>
+  <text class="lb f" x="722" y="144">미달 · 회귀 발견 → 수정 모드 재시도 (최대 3회)</text>
+
+  <!-- Agent -> tool groups -->
+  <path class="ln" d="M275 246V346" marker-end="url(#m)"/>
+  <path class="ln" d="M530 246V346" marker-end="url(#m)"/>
+  <path class="ln" d="M800 246V346" marker-end="url(#m)"/>
+  <path class="ln" d="M940 246V346" marker-end="url(#m)"/>
+  <text class="lb s" x="283" y="300">호출</text>
+
+  <!-- Tool groups -->
+  <rect class="bx a" x="170" y="348" width="320" height="110" rx="8"/>
+  <text class="tg" x="186" y="370">분석 도구</text>
+  <text class="tn" x="186" y="396">predict_fault_location</text><text class="bd m r" x="478" y="396">ML · DL</text>
+  <text class="tn" x="186" y="418">search_history</text><text class="bd k r" x="478" y="418">RAG</text>
+  <text class="tn" x="186" y="440">get_callers · get_coverage</text><text class="bd t r" x="478" y="440">CODE</text>
+
+  <rect class="bx a" x="500" y="348" width="260" height="110" rx="8"/>
+  <text class="tg" x="516" y="370">수정 도구</text>
+  <text class="tn" x="516" y="396">search_rules</text><text class="bd k r" x="748" y="396">RAG</text>
+  <text class="tn" x="516" y="418">read_method · apply_patch</text><text class="bd t r" x="748" y="418">CODE</text>
+  <text class="tn" x="516" y="440">run_tests</text><text class="bd t r" x="748" y="440">CODE</text>
+
+  <rect class="bx a" x="770" y="348" width="410" height="110" rx="8"/>
+  <text class="tg" x="786" y="370">공격 · 판정 도구</text>
+  <text class="tn" x="786" y="396">run_diff · property_attack</text><text class="bd t r" x="1168" y="396">CODE · HYPOTHESIS</text>
+  <text class="tn" x="786" y="418">attack_memory</text><text class="bd k r" x="1168" y="418">RAG</text>
+  <text class="tn" x="786" y="440">check_deprecated · check_security</text><text class="bd t r" x="1168" y="440">CODE</text>
+
+  <!-- Data -->
+  <path class="ln" d="M250 504V460" marker-end="url(#m)"/>
+  <path class="ln" d="M415 504V460" marker-end="url(#m)"/>
+  <path class="ln" d="M630 504V460" marker-end="url(#m)"/>
+  <path class="ln" d="M850 504V460" marker-start="url(#m)" marker-end="url(#m)"/>
+  <path class="ln" d="M1060 504V460" marker-end="url(#m)"/>
+
+  <rect class="bx m" x="170" y="506" width="160" height="80" rx="8"/>
+  <text class="bd m" x="180" y="522">DL + ML</text>
+  <text class="tt" x="250" y="544">결함 위치 모델</text>
+  <text class="ss" x="250" y="564">임베딩 + XGBoost Ranker</text>
+
+  <rect class="bx k" x="340" y="506" width="150" height="80" rx="8"/>
+  <text class="bd k" x="350" y="522">CHROMA</text>
+  <text class="tt" x="415" y="544">장애·조치 이력</text>
+  <text class="ss" x="415" y="564">결함 주입 데이터</text>
+
+  <rect class="bx k" x="500" y="506" width="260" height="80" rx="8"/>
+  <text class="bd k" x="510" y="522">CHROMA</text>
+  <text class="tt" x="630" y="544">사내 규칙 KB</text>
+  <text class="ss" x="630" y="564">시큐어코딩 · 개발 표준 · 가상 규칙 40건</text>
+
+  <rect class="bx k" x="770" y="506" width="160" height="80" rx="8"/>
+  <text class="bd k" x="780" y="522">CHROMA</text>
+  <text class="tt" x="850" y="544">공격 이력</text>
+  <text class="ss" x="850" y="564">성공 공격 재사용</text>
+
+  <rect class="bx" x="940" y="506" width="240" height="80" rx="8"/>
+  <text class="bd t" x="950" y="522">PYTHON 3.12 · PYTEST · SQLITE</text>
+  <text class="tt" x="1060" y="544">주문·정산 프로젝트</text>
+  <text class="ss" x="1060" y="564">원본 / 작업본 · 실행 샌드박스</text>
+</svg>
+  </div>
+  <div class="legend">
+    <span><i class="sw"></i>실행 흐름 · 도구 호출</span>
+    <span><i class="sw f"></i>수정 재시도 루프</span>
+    <span><b class="tag a">AGENT</b>Claude 에이전트</span>
+    <span><b class="tag k">RAG</b>벡터 검색</span>
+    <span><b class="tag m">ML · DL</b>학습 모델</span>
+    <span><b class="tag t">CODE</b>결정적 코드</span>
+  </div>
+
+  <div class="block">
+    <h3>데이터 명세</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>데이터</th><th>출처</th><th>형식 · 건수</th><th>주요 컬럼 · 의미</th></tr></thead>
+        <tbody>
+          <tr><td>주문·정산 프로젝트</td><td>가상 생성 (Python 3.8 스타일 레거시, 3.12에서 실행)</td><td class="num">모듈 10개 · 함수·메서드 약 100개</td><td>주문·할인·결제·정산·고객 모듈, pytest 테스트 포함. 3.12에서 지원 종료 예고된 API(<code>datetime.utcnow</code>, <code>pytz</code> 등)와 보안 약점을 의도적으로 포함</td></tr>
+          <tr><td>결함 티켓 데이터셋</td><td>결함 주입(mutmut 뮤테이션 + LLM) 후 LLM이 티켓 문장 작성</td><td class="num">CSV · 티켓 300~500건</td><td><code>ticket_id</code>, <code>title</code>, <code>body</code> 증상 설명, <code>stacktrace</code> (일부만 포함), <code>fixed_method</code> 정답 메서드, <code>inject_type</code> 주입 방식</td></tr>
+          <tr><td>장애·조치 이력 KB</td><td>위 데이터셋의 학습 분할을 재사용</td><td class="num">Chroma · 약 250건</td><td><code>ticket</code>, <code>root_cause</code>, <code>fix_summary</code>, <code>method</code></td></tr>
+          <tr><td>사내 규칙 KB</td><td>시큐어코딩 가이드·개발 표준 요약 재작성 + 가상 사내 규칙</td><td class="num">JSON · 40건</td><td><code>rule_id</code>, <code>category</code>, <code>description</code>, <code>bad_example</code>, <code>good_example</code>, <code>severity</code></td></tr>
+          <tr><td>공격 이력</td><td>실행 중 자동 생성</td><td class="num">Chroma</td><td><code>ticket_id</code>, <code>attack_type</code> 미달/회귀, <code>input</code>, <code>expected</code>, <code>actual</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">스택트레이스는 일부 티켓에만 넣습니다. 항상 있으면 메서드명 일치만으로 거의 다 맞혀서 모델의 의미가 약해집니다.</p>
+    <p class="note"><b>데이터 누수 방지</b>: 장애·조치 이력 KB와 프롬프트 예시는 학습 분할에서만 만듭니다. 평가 티켓과 E2E 홀드아웃 20건은 KB·예시·과거 결함 수 피처 계산에서 모두 제외합니다.</p>
+  </div>
+
+  <div class="block">
+    <h3>ML/DL 모델 설계</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>항목</th><th>내용</th></tr></thead>
+        <tbody>
+          <tr><td>문제 유형</td><td>순위 학습 (Learning to Rank): 티켓 1건당 후보 메서드 순위</td></tr>
+          <tr><td>입력 → 출력</td><td>티켓 텍스트 + 메서드 코드 → 메서드별 결함 점수, 상위 3개</td></tr>
+          <tr><td>DL 역할</td><td>사전학습 임베딩 모델(UniXcoder 또는 bge-m3)로 한국어 증상 설명과 영어 코드의 의미 유사도 계산. 파인튜닝 없음</td></tr>
+          <tr><td>ML 역할</td><td>XGBoost Ranker(LambdaMART)가 임베딩 유사도, TF-IDF 유사도, 스택트레이스 메서드명 일치, 복잡도·길이, 과거 결함 수를 종합</td></tr>
+          <tr><td>비교 실험</td><td>① TF-IDF 단독(베이스라인) ② 임베딩 유사도 단독 ③ 혼합형</td></tr>
+          <tr><td>평가 지표 · 목표</td><td>Top-3 정확도 0.80 이상, Top-1 정확도, MRR. 티켓 단위 8:2 분할, 스택트레이스 유무별·주입 방식별로 나눠 보고</td></tr>
+          <tr><td>예측 근거 설명</td><td>SHAP으로 후보별 기여도 상위 피처 3개를 계산해 <code>reasons</code>로 반환하고 화면에 표시</td></tr>
+          <tr><td>에이전트 Ablation</td><td>홀드아웃 티켓 20건으로 ① 예측 도구 없음 vs 있음(해결률·토큰·소요 시간) ② 공격 단계 없음 vs 있음(회귀 누출 건수)을 비교해 모델과 공격 에이전트가 실제로 기여하는지 확인</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>Agent 구조: 워크플로 그래프</h3>
+    <p>처리 순서(분석 → 수정 → 공격 → 판정 → 승인)가 정해져 있어 Supervisor 대신 고정 워크플로를 씁니다. 역할별로 도구를 나눠 각 에이전트가 볼 도구를 줄였고, 통과 여부는 LLM이 아닌 판정 노드가 결정합니다. 판정에서 실패하면 실패 내용을 붙여 수정 에이전트를 다시 호출합니다.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>수정 유형</th><th>판정 노드의 통과 조건</th></tr></thead>
+        <tbody>
+          <tr><td>결함 수정</td><td>재현 테스트가 원본에서 실패하고 수정본에서 통과 · 기존 테스트 통과 · 결함 영역 밖 Hypothesis 생성 입력 200개에서 원본과 출력 동일</td></tr>
+          <tr><td>노후화 대응</td><td>Hypothesis 생성 입력 200개에서 원본과 출력 완전 동일 · 지원 종료 API 사용 0건 (<code>-W error::DeprecationWarning</code>로 테스트 통과)</td></tr>
+          <tr><td>보안 진단 조치</td><td>규칙 위반 패턴 0건(bandit · 사내 규칙 검사) · 공격 입력 무력화 · 정상 입력은 원본과 출력 동일</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>도구(Tool) 명세</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>도구</th><th>입력 파라미터</th><th>출력 포맷</th><th>담당 업무</th></tr></thead>
+        <tbody>
+          <tr><td><code>predict_fault_location</code></td><td><code>ticket_text: str, top_k: int = 3</code></td><td><code>[{method, score, reasons}]</code></td><td>결함 위치 예측 모델 호출</td></tr>
+          <tr><td><code>search_history</code></td><td><code>query: str, top_k: int = 3</code></td><td><code>[{ticket, root_cause, fix_summary}]</code></td><td>유사 과거 장애·조치 검색</td></tr>
+          <tr><td><code>get_callers</code></td><td><code>method: str</code></td><td><code>[method]</code></td><td>AST 기반 호출부 조회 (회귀 공격 대상 선정)</td></tr>
+          <tr><td><code>get_coverage</code></td><td><code>method: str</code></td><td><code>[{test, lines_hit}]</code></td><td>coverage.py로 수정 함수를 지나는 테스트 조회, 회귀 공격 우선순위 결정</td></tr>
+          <tr><td><code>search_rules</code></td><td><code>code: str, top_k: int = 5</code></td><td><code>[{rule_id, description, good_example}]</code></td><td>관련 사내 규칙 검색</td></tr>
+          <tr><td><code>read_method</code> / <code>apply_patch</code></td><td><code>method: str</code> / <code>method: str, new_code: str</code></td><td>코드 문자열 / <code>{applied, compile_ok, error}</code></td><td>작업본 코드 읽기·수정</td></tr>
+          <tr><td><code>run_tests</code></td><td><code>version: "original"|"patched", tests: list | None</code></td><td><code>{passed, failed: [{test, trace}]}</code></td><td>빌드·테스트 실행</td></tr>
+          <tr><td><code>run_diff</code></td><td><code>method: str, inputs: list</code></td><td><code>[{input, original, patched, same}]</code></td><td>원본 vs 수정본 차등 실행 (LLM이 설계한 입력)</td></tr>
+          <tr><td><code>property_attack</code></td><td><code>method: str, strategy_spec: dict, max_examples: int = 200</code></td><td><code>[{input, original, patched, same}]</code></td><td>Hypothesis 전략(경계값·범위·조합)으로 입력을 생성해 차등 실행, 불일치 입력은 최소 사례로 축소</td></tr>
+          <tr><td><code>attack_memory</code></td><td><code>op: "search"|"save", attack_type: str, record?: dict</code></td><td><code>[{input, expected, actual}]</code></td><td>과거 성공 공격 재사용·저장</td></tr>
+          <tr><td><code>check_deprecated</code> / <code>check_security</code></td><td><code>version: str</code></td><td><code>[{location, api | rule_id}]</code></td><td>지원 종료 API · 보안 규칙 위반 검사</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h3>상태 · 메모리</h3>
+      <ul>
+        <li><b>티켓 상태</b>: <code>ticket_id</code> 단위로 단계, 예측 위치, 패치, 시도 횟수, 실패 목록 보관</li>
+        <li><b>장기 메모리</b>: 공격 이력. 다음 티켓에서 같은 유형의 성공 공격을 먼저 시도</li>
+        <li>에이전트 간에는 대화가 아닌 구조화된 결과(JSON)만 전달</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>안전장치 (Guard)</h3>
+      <ul>
+        <li><b>HITL</b>: 작업본 반영 전 담당자 승인 필수, 반려 시 사유 기록</li>
+        <li><b>정답 보호</b>: 에이전트는 기존 테스트와 기대 출력을 수정할 수 없음</li>
+        <li><b>실행 격리</b>: 원본은 읽기 전용, 수정은 임시 작업본 디렉터리에서만. <code>subprocess</code>로 실행, 타임아웃 10초</li>
+        <li><b>루프 상한</b>: 수정 재시도 3회, 티켓당 토큰 상한</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>기술 스택</h3>
+    <div class="tbl">
+      <table>
+        <tbody>
+          <tr><td>언어</td><td>Python 3.12 (에이전트·모델·화면·대상 프로젝트 실행), 대상 프로젝트 코드는 3.8 스타일로 작성</td></tr>
+          <tr><td>LLM</td><td>Claude (<code>claude-opus-5-5</code>), Anthropic Python SDK tool use</td></tr>
+          <tr><td>ML/DL</td><td>XGBoost, scikit-learn, sentence-transformers (사전학습 임베딩), SHAP</td></tr>
+          <tr><td>테스트 · 공격</td><td>pytest, coverage.py, Hypothesis (속성 기반 테스트)</td></tr>
+          <tr><td>결함 주입 · 검사</td><td>mutmut, AST 기반 지원 종료 API 검사 + ruff <code>UP</code> 규칙, bandit + 사내 규칙 AST 검사</td></tr>
+          <tr><td>벡터 저장소</td><td>Chroma</td></tr>
+          <tr><td>DB · UI</td><td>SQLite (인메모리), Streamlit</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ④ -->
+<section class="slide">
+  <div class="slide-head">
+    <div class="slide-no">④ 기능 범위 · 화면 · 일정</div>
+    <h2>기능 범위</h2>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>구분</th><th>기능</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill must">Must 1</span></td><td>가상 프로젝트 · 실행 도구</td><td>주문·정산 프로젝트, <code>run_tests</code>, <code>run_diff</code></td></tr>
+        <tr><td><span class="pill must">Must 2</span></td><td>결함 위치 예측 모델</td><td>결함 주입 데이터 생성, 혼합형 모델 학습·평가, 도구로 노출</td></tr>
+        <tr><td><span class="pill must">Must 3</span></td><td>RAG 2종</td><td>장애·조치 이력, 사내 규칙</td></tr>
+        <tr><td><span class="pill must">Must 4</span></td><td>분석 · 수정 · 공격 에이전트 + 판정</td><td>세 수정 유형의 통과 조건 판정, 재시도 3회</td></tr>
+        <tr><td><span class="pill must">Must 5</span></td><td>Streamlit 화면 + 승인</td><td>티켓 처리 과정·근거·diff·공격 로그 표시, 승인/반려</td></tr>
+        <tr><td><span class="pill nice">Nice</span></td><td>연쇄 수정</td><td>공통 모듈 변경 시 호출부까지 다중 파일 패치</td></tr>
+        <tr><td><span class="pill nice">Nice</span></td><td>DL 크로스 인코더</td><td>UniXcoder 파인튜닝 모델과 혼합형 성능 비교</td></tr>
+        <tr><td><span class="pill nice">Nice</span></td><td>전략 재설계</td><td>같은 공격에 반복 실패 시 수정 전략 자체를 바꿈</td></tr>
+        <tr><td><span class="pill nice">Nice</span></td><td>외부 검증</td><td>BugsInPy 일부로 실제 오픈소스 결함에 적용</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="block">
+    <h3>화면 와이어프레임</h3>
+    <div class="wire" aria-label="화면 와이어프레임">
+      <div class="side">
+        <div class="wf"><b>티켓 목록</b>
+          <div class="tlist">
+            <div class="on"><span>SR-2041 결함</span><small>검증 중</small></div>
+            <div><span>SR-2077 노후화</span><small>대기</small></div>
+            <div><span>SR-2103 보안</span><small>대기</small></div>
+          </div>
+        </div>
+        <div class="wf"><b>새 티켓 등록</b>유형 선택 · 내용 입력</div>
+        <div class="kpis3">
+          <div class="wf"><b>재시도</b><span>2 / 3</span></div>
+          <div class="wf"><b>발견한 미달·회귀</b><span>1건</span></div>
+          <div class="wf"><b>테스트 통과</b><span>48 / 48</span></div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="steps"><span class="done">분석</span><span class="done">수정</span><span class="now">공격</span><span>판정</span><span>승인</span></div>
+        <div class="tabs"><span class="on">결함 위치</span><span>근거 (이력·규칙)</span><span>패치 diff</span><span>공격 로그</span></div>
+        <div class="wf"><b>결함 위치 Top-3</b>
+          <div class="rank">
+            <div><span>1</span><span>discount.apply_coupon</span><span>0.82</span></div>
+            <div><span>2</span><span>order_calc.total_amount</span><span>0.41</span></div>
+            <div><span>3</span><span>settlement.net_amount</span><span>0.17</span></div>
+          </div>
+          <p class="note">1위 근거(SHAP): 임베딩 유사도 +0.31 · 과거 결함 2건 +0.12 · 복잡도 +0.05</p>
+        </div>
+        <div class="wf"><b>공격 로그</b>[미달 · Hypothesis] <code>amount=100000, coupons=2</code> → 기대 90,000 · 실제 -10,000 · 수정 모드로 재시도</div>
+        <div class="btns"><span>반려</span><span class="ok">승인 후 반영</span></div>
+      </div>
+    </div>
+    <p class="note">화면 1개. 왼쪽에 티켓 목록과 KPI, 가운데에 진행 단계와 탭 4개, 아래에 승인 버튼. 값은 화면 구성을 보여주는 샘플입니다.</p>
+  </div>
+
+  <div class="block">
+    <h3>시연 시나리오</h3>
+    <div class="scen">
+      <div class="sc">
+        <h3>1. 결함 수정: 쿠폰 중복 적용 시 정산 금액 음수</h3>
+        <div class="ticket">SR-2041 · "10만 원 이상 주문에 쿠폰을 두 장 쓰면 정산 금액이 음수로 찍힙니다." (스택트레이스 없음)</div>
+        <div class="flow">predict_fault_location → search_history → get_callers · get_coverage → 재현 테스트 작성 → run_tests(원본 실패 확인) → search_rules → apply_patch → run_tests → run_diff · property_attack(미달·회귀 공격) → 판정 → 승인</div>
+        <p class="res"><b>결과</b>: Top-1으로 <code>apply_coupon</code>을 예측하고 SHAP 근거를 함께 보여줍니다. 1차 패치는 Hypothesis가 경계값(정확히 10만 원)에서 미달을 찾아내고, 2차 패치가 통과합니다. 화면에 근거 이력 ID와 공격 로그가 표시됩니다.</p>
+      </div>
+      <div class="sc">
+        <h3>2. 노후화 대응: 날짜 API 교체</h3>
+        <div class="ticket">SR-2077 · "Python 3.12 전환 대비, 정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거해 주세요."</div>
+        <div class="flow">check_deprecated → search_rules → apply_patch → run_tests → property_attack(월말·윤년·자정·DST 경계 입력) → check_deprecated → 판정 → 승인</div>
+        <p class="res"><b>결과</b>: 사용 위치를 <code>datetime.now(timezone.utc)</code>와 <code>zoneinfo</code>로 교체하고, 생성 입력 전체에서 원본과 출력이 같음을 확인합니다. 지원 종료 API 0건으로 통과합니다.</p>
+      </div>
+      <div class="sc">
+        <h3>3. 보안 진단 조치: SQL 문자열 결합</h3>
+        <div class="ticket">SR-2103 · "시큐어코딩 진단: customer_dao.find_by_name에서 f-string으로 SQL 조립"</div>
+        <div class="flow">search_rules(SEC-SQL-01) → apply_patch(파라미터 바인딩 ?) → check_security → run_diff(인젝션 문자열 · 정상 입력) → attack_memory(save) → 판정 → 승인</div>
+        <p class="res"><b>결과</b>: 패치 설명에 규칙 ID가 인용되고, 인젝션 입력은 무력화되며, 정상 조회 결과는 원본과 같습니다. 성공한 공격 입력은 다음 보안 티켓에서 재사용됩니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>5일 개발 일정</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>일차</th><th>작업</th><th>완료 기준</th></tr></thead>
+        <tbody>
+          <tr><td>1일차</td><td>주문·정산 프로젝트와 pytest 테스트 작성, 실행 도구, 환경 확인(venv·mutmut)</td><td><code>run_tests</code>, <code>run_diff</code> 단독 동작</td></tr>
+          <tr><td>2일차</td><td>결함 주입 → 티켓 생성 → 데이터셋, 결함 위치 모델 학습·평가</td><td>세 모델 비교표, Top-3 측정</td></tr>
+          <tr><td>3일차</td><td>RAG 2종 구축, 분석·수정 에이전트</td><td>시나리오 1이 CLI에서 끝까지 동작</td></tr>
+          <tr><td>4일차</td><td>공격 에이전트(<code>property_attack</code>, <code>get_coverage</code>), 노후화·보안 판정, Streamlit 화면</td><td>시나리오 1~3이 화면에서 동작</td></tr>
+          <tr><td>5일차</td><td>오전: 홀드아웃 20건 E2E·Ablation 배치 실행(전날 밤 시작). 오후: KPI 정리, 발표 준비</td><td>KPI·Ablation 결과표, 시연 리허설 완료</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>리스크와 대응</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>리스크</th><th>대응</th></tr></thead>
+        <tbody>
+          <tr><td>2일차 작업량 과다 (데이터 + 모델)</td><td>결함 주입은 mutmut 결과를 기본으로 하고 LLM 주입은 보조로만 사용</td></tr>
+          <tr><td>가상 데이터라 모델 성능이 과대평가됨</td><td>주입 방식별·스택트레이스 유무별로 나눠 평가하고 그대로 보고</td></tr>
+          <tr><td>패치가 수렴하지 않음</td><td>재시도 3회 후 사람 검토로 넘기고, 실패 사유를 화면에 표시</td></tr>
+          <tr><td>LLM이 만든 코드가 로컬 환경을 건드림</td><td>임시 작업본 디렉터리에서만 실행, 타임아웃 10초, 테스트 파일 쓰기 금지</td></tr>
+          <tr><td>Ablation 실행 비용 · 시간</td><td>홀드아웃 20건 × 3조건으로 규모를 고정하고, 4일차 밤에 배치로 미리 실행</td></tr>
+          <tr><td>Hypothesis 입력이 부동소수점·시간대 등으로 거짓 불일치를 만듦</td><td>금액은 정수(원), 시각은 UTC 고정으로 전략을 정의하고, 불일치 사례는 축소된 최소 입력으로 재확인</td></tr>
+          <tr><td>시연 중 API 응답 지연</td><td>시연 티켓은 사전 실행 결과를 캐시해 재생 가능하게 준비</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+</div>
