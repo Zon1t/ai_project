@@ -3,6 +3,8 @@
 > 작성일: 2026-10-19 · 범위: PRD 10장 1일차 · 상태: 완료
 >
 > 확인 결과: 원본 테스트 152 passed, 에이전트 시스템 테스트 70 passed, ruff 통과
+>
+> **2일차 이후 바뀐 점 (2026-10-20 갱신)**: 결함 데이터를 늘리기 위해 대상 프로젝트에 모듈 8개를 추가했다 (모듈 12 → 20개, 함수 108 → 268개, 테스트 152 → 1,145개). 기존 12개 모듈과 테스트는 그대로다. 에이전트 시스템 테스트는 70 → 168개가 되었다. 이 문서의 본문은 1일차 기준이며, 바뀐 수치는 **[2일차]**로 표시했다. 추가 내용은 [step2.md](step2.md)를 본다.
 
 이 문서는 Step 1에서 만든 파일이 무엇인지, 테스트가 무엇을 검사하는지, pytest가 어떻게 동작하는지 설명한다.
 
@@ -24,7 +26,7 @@ runs/SR-2041/
 
 | PRD ID | 내용 | 결과물 |
 |---|---|---|
-| F1-1 | 주문·정산 가상 레거시 프로젝트 | `target/order_settlement/` (모듈 12개, 함수 108개, 테스트 152개) |
+| F1-1 | 주문·정산 가상 레거시 프로젝트 | `target/order_settlement/` (모듈 12개, 함수 108개, 테스트 152개. **[2일차]** 모듈 20개, 함수 268개, 테스트 1,145개) |
 | F1-2 | 의도적 요소 (지원 종료 API, 보안 약점, S1 결함) | 위 프로젝트 안에 포함 |
 | F1-3 | 원본 읽기 전용, 작업본에서만 수정 | `src/sr_agent/tools/workspace.py` |
 | F1-4 | `run_tests`, `run_diff` 도구 | `src/sr_agent/tools/execution.py` |
@@ -40,8 +42,8 @@ project/
 ├── docs/step1.md                       # 이 문서
 ├── target/order_settlement/            # [F1-1, F1-2] 대상 레거시 프로젝트
 │   ├── pyproject.toml                  #   대상 프로젝트 자체의 pytest 설정
-│   ├── src/order_settlement/*.py       #   업무 코드 12개 모듈
-│   └── tests/*.py                      #   대상 프로젝트의 기존 테스트 152개
+│   ├── src/order_settlement/*.py       #   업무 코드 12개 모듈 ([2일차] 20개)
+│   └── tests/*.py                      #   대상 프로젝트의 기존 테스트 152개 ([2일차] 1,145개)
 ├── src/sr_agent/
 │   ├── config.py                       # 설정값 한곳 (경로·타임아웃·시드·모델)
 │   └── tools/
@@ -49,7 +51,7 @@ project/
 │       ├── execution.py                # [F1-4] run_tests, run_diff
 │       ├── _pytest_report.py           #   자식 pytest에 붙는 결과 기록 플러그인
 │       └── _diff_runner.py             #   run_diff가 띄우는 함수 실행기
-└── tests/                              # 에이전트 시스템 자체의 테스트 70개
+└── tests/                              # 에이전트 시스템 자체의 테스트 70개 ([2일차] 168개)
     ├── conftest.py                     #   공통 픽스처 (작은 가짜 대상 프로젝트)
     ├── test_config.py
     ├── test_workspace.py
@@ -82,6 +84,8 @@ project/
 | `date_utils` | 날짜·영업일 | 12 | `utcnow`, `pytz` |
 | `report` | 운영 리포트 | 8 | f-string SQL, 개인정보 로그 |
 | `errors` | 예외·오류 응답 | 3 | 트레이스백 노출 |
+
+**[2일차] 추가 모듈 8개** (함수 각 20개): `shipping`(배송), `inventory`(재고), `point`(포인트), `promotion`(프로모션), `notification`(알림 발송), `tax`(세금·영수증), `review`(상품 리뷰), `seller`(판매자 관리). 결함 위치 예측 학습 데이터를 늘리려고 추가했으며, 시연 시나리오와는 관계없다. 일부러 넣은 결함이나 지원 종료 API는 없다. 자세한 내용은 [step2.md](step2.md) 2장.
 
 **시연 재료 위치**
 
@@ -351,7 +355,9 @@ run_tests(ws, "patched")
 | `test_report.py` | 8 | 일·월 매출, 우수 고객, CSV |
 | `test_errors.py` | 4 | 오류 응답, 안전한 정수 변환 |
 
-**일부러 빠뜨린 것:** 쿠폰 2장이 결함을 드러내는 경우(10만 원대 주문)는 테스트하지 않는다. 그래서 S1 결함이 있는데도 152개가 모두 통과한다. 이 공백을 재현 테스트와 공격 에이전트가 찾아야 한다.
+**[2일차] 추가 테스트 993개:** `test_shipping.py` 150, `test_tax.py` 137, `test_inventory.py` 134, `test_notification.py` 130, `test_seller.py` 130, `test_promotion.py` 124, `test_review.py` 97, `test_point.py` 91. 새 모듈의 모든 함수를 경계값 양쪽까지 검사한다 (결함을 심으면 테스트가 실패해야 결함 데이터로 쓸 수 있기 때문).
+
+**일부러 빠뜨린 것:** 쿠폰 2장이 결함을 드러내는 경우(10만 원대 주문)는 테스트하지 않는다. 그래서 S1 결함이 있는데도 기존 테스트가 모두 통과한다. 이 공백을 재현 테스트와 공격 에이전트가 찾아야 한다.
 
 **`test_due_date_default_now`:** 인자 없이 `calc_due_date()`를 호출한다. `-W error::DeprecationWarning`으로 돌리면 원본은 `utcnow` 때문에 실패하고, 올바르게 고친 버전은 통과한다. S2 판정이 의미를 갖게 하려고 넣은 테스트다.
 
@@ -373,8 +379,8 @@ run_tests(ws, "patched")
 
 ```powershell
 .venv\Scripts\Activate.ps1
-pytest target/order_settlement/tests -q     # 152 passed
-pytest tests -v                             # 70 passed, 항목별 이름 표시
+pytest target/order_settlement/tests -q     # 152 passed ([2일차] 1,145 passed)
+pytest tests -v                             # 70 passed ([2일차] 168 passed), 항목별 이름 표시
 ruff check src tests
 ```
 
