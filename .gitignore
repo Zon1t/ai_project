@@ -237,6 +237,4 @@ $RECYCLE.BIN/
 runs/
 data/chroma/
 .ruff_cache/
-.mutmut-cache
-mutants/
 .streamlit/secrets.toml

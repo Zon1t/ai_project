@@ -28,6 +28,7 @@ TICKETS_DIR = DATA_DIR / "tickets"
 RULES_PATH = DATA_DIR / "rules" / "rules.json"
 CHROMA_DIR = DATA_DIR / "chroma"
 MODELS_DIR = DATA_DIR / "models"
+MUTANTS_DIR = DATA_DIR / "mutants"  # F2-1·F2-2 결함 버전 (mutants.jsonl, summary.json)
 EVAL_RESULTS_DIR = PROJECT_ROOT / "eval" / "results"
 
 # 재현성 (분할, Hypothesis, 학습)
@@ -43,6 +44,11 @@ MAX_FAILURES_REPORTED = 10
 MAX_TRACE_CHARS = 2000
 MAX_DIFF_INPUTS = 50
 MAX_VALUE_CHARS = 500
+
+# 결함 주입 (F2-1, F2-2)
+MUTANTS_PER_METHOD = 5  # 함수당 채택 상한 (특정 함수 쏠림 방지)
+MUTGEN_WORKERS = 4  # 뮤턴트 테스트 병렬 작업본 수
+MUTANT_TRACES_KEPT = 3  # 뮤턴트마다 저장할 실패 트레이스 수
 
 # LLM (에이전트 단계에서 사용)
 MODEL = "gpt-5"  # 분석·수정·공격 에이전트

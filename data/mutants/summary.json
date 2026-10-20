@@ -1,0 +1,42 @@
+{
+  "seed": 42,
+  "limit": null,
+  "per_method": 5,
+  "target_digest": "6c420fd7e86a455161535c6366f106a8311d91b90c1973f95070b5529f61474a",
+  "target_unchanged": true,
+  "candidates": 348,
+  "candidates_by_operator": {
+    "AOR": 52,
+    "CRP": 92,
+    "LCR": 14,
+    "MMR": 2,
+    "NEG": 77,
+    "ROR": 76,
+    "SDL": 35
+  },
+  "evaluated": 244,
+  "outcomes": {
+    "killed": 220,
+    "survived": 17,
+    "timeout": 7
+  },
+  "accepted": 220,
+  "accepted_by_operator": {
+    "AOR": 34,
+    "CRP": 49,
+    "LCR": 11,
+    "MMR": 1,
+    "NEG": 53,
+    "ROR": 53,
+    "SDL": 19
+  },
+  "methods_with_candidates": 80,
+  "methods_covered": 76,
+  "methods_uncovered": [
+    "date_utils.is_holiday",
+    "db.execute",
+    "discount.calc_grade_discount",
+    "report.format_report_line"
+  ],
+  "elapsed_s": 187.5
+}
