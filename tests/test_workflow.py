@@ -234,3 +234,16 @@ def test_repro_with_wrong_expectation_is_rejected_by_reference(run):
     assert state.status == "approval_pending" and state.analysis_tries == 2
     feedback = agents.inputs["analysis"][1]
     assert "기대값이 업무 규칙과 다름" in feedback and "max(0" not in feedback  # 정답 코드는 알려 주지 않는다
+
+
+def test_repro_path_fallback_and_feedback_hides_values(bug_ws):
+    from sr_agent.tools.testing import write_repro_test
+
+    write_repro_test(bug_ws, "never_negative", REPRO)
+    written = "repro_tests/test_never_negative.py"
+    assert graph.resolve_repro_path(bug_ws, "repro_tests/test_other_name.py") == written
+    assert graph.resolve_repro_path(bug_ws, written) == written
+    write_repro_test(bug_ws, "wrong", WRONG)
+    problem = graph.verify_repro(bug_ws, "repro_tests/test_wrong.py", TICKET)
+    assert "assert calc.payable(100, 300) == 5" in problem  # 실패한 단언 코드 줄
+    assert "where" not in problem and "0 == 5" not in problem  # 정답 구현의 출력 값은 알려 주지 않는다

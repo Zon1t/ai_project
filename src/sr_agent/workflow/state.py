@@ -38,9 +38,10 @@ class JudgeSpec(BaseModel):
     """
 
     method: str  # Hypothesis로 호출할 진입 함수 (예: discount.apply_coupons)
-    strategy: dict  # property_attack과 같은 strategy_spec
+    strategy: dict | None = None  # property_attack과 같은 strategy_spec (없으면 Hypothesis 비교 미평가)
     reference: ReferenceImpl | None = None
     attack_inputs: list[AttackInput] = Field(default_factory=list)
+    hidden_tests: list[str] = Field(default_factory=list)  # E2E: 에이전트에게 숨긴 정답 테스트 (tests/...::name)
 
 
 class Ticket(BaseModel):

@@ -127,6 +127,7 @@ LLM_TIMEOUT_S = 120
 LLM_MAX_RETRIES = 3
 MAX_OUTPUT_TOKENS = 16000  # 추론 토큰 포함
 MAX_PATCH_RETRIES = 3
+PRICE_PER_MTOK = {"input": 1.25, "cached": 0.125, "output": 10.0}  # gpt-5 가격 가정 (비용 추정용, USD)
 
 # 에이전트 공통 (F5, F7-1)
 MODEL_FALLBACK: str | None = None  # 기본 모델 호출이 서버 오류로 실패할 때 쓸 모델. 사용자 결정 전까지 끔

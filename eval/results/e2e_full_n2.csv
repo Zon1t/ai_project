@@ -1,0 +1,3 @@
+ticket_id,mutant_id,method,inject_type,operator,status,solved,model_top3_hit,model_rank,agent_location_correct,agent_method,attempts,passed_at_attempt,tokens,cost_usd,seconds,reason
+E2E-00594a87-A,MUT-00594a87,coupon.create_coupon,ast,RSD,human_review,False,,,True,coupon.create_coupon,0,,709659,0.6664,592.4,분석 실패: 재현 테스트 실행 오류: 테스트 경로 없음: repro_tests/test_coupon_create_rejects_unsupported_type.py
+E2E-0525b867-A,MUT-0525b867,seller.calc_commission_rate,llm,LLM,approval_pending,True,True,1,True,seller.calc_commission_rate,1,1,242359,0.3069,341.6,

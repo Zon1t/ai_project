@@ -1,0 +1,76 @@
+{
+  "tag": "full_n2",
+  "options": {
+    "use_predict": true,
+    "use_attack": true
+  },
+  "reporter": "A",
+  "summary": {
+    "n": 2,
+    "solved": 1,
+    "solved_rate": 0.5,
+    "model_top3_rate": 1.0,
+    "agent_location_rate": 1.0,
+    "mean_attempts": 0.5,
+    "passed_at_attempt": {
+      "1": 1,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "tokens_total": 952018,
+    "tokens_mean": 476009,
+    "cost_usd_total": 0.97,
+    "seconds_mean": 467.0,
+    "by_inject_type": {
+      "ast": {
+        "n": 1,
+        "solved_rate": 0.0
+      },
+      "llm": {
+        "n": 1,
+        "solved_rate": 1.0
+      }
+    }
+  },
+  "rows": [
+    {
+      "ticket_id": "E2E-00594a87-A",
+      "mutant_id": "MUT-00594a87",
+      "method": "coupon.create_coupon",
+      "inject_type": "ast",
+      "operator": "RSD",
+      "status": "human_review",
+      "solved": false,
+      "model_top3_hit": null,
+      "model_rank": null,
+      "agent_location_correct": true,
+      "agent_method": "coupon.create_coupon",
+      "attempts": 0,
+      "passed_at_attempt": null,
+      "tokens": 709659,
+      "cost_usd": 0.6664,
+      "seconds": 592.4,
+      "reason": "분석 실패: 재현 테스트 실행 오류: 테스트 경로 없음: repro_tests/test_coupon_create_rejects_unsupported_type.py"
+    },
+    {
+      "ticket_id": "E2E-0525b867-A",
+      "mutant_id": "MUT-0525b867",
+      "method": "seller.calc_commission_rate",
+      "inject_type": "llm",
+      "operator": "LLM",
+      "status": "approval_pending",
+      "solved": true,
+      "model_top3_hit": true,
+      "model_rank": 1,
+      "agent_location_correct": true,
+      "agent_method": "seller.calc_commission_rate",
+      "attempts": 1,
+      "passed_at_attempt": 1,
+      "tokens": 242359,
+      "cost_usd": 0.3069,
+      "seconds": 341.6,
+      "reason": ""
+    }
+  ]
+}

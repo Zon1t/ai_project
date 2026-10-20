@@ -9,6 +9,7 @@
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from openai import OpenAI
@@ -28,6 +29,37 @@ from sr_agent.workflow.reference import build_reference
 from sr_agent.workflow.state import FixAttempt, Ticket, TicketState
 
 FINAL = {"approval_pending", "human_review", "approved", "rejected"}
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    """Ablation(F7-3)용 조건. 기본은 전체 기능."""
+
+    use_predict: bool = True  # 분석 에이전트에 predict_fault_location 제공
+    use_attack: bool = True  # 공격 단계 실행
+
+
+def _analysis_spec(options: RunOptions):
+    if options.use_predict:
+        return ANALYSIS
+    return replace(ANALYSIS, tools=tuple(t for t in ANALYSIS.tools if t != "predict_fault_location"))
+
+
+def resolve_repro_path(ws: Workspace, path: str) -> str:
+    """보고한 재현 테스트 경로가 없으면 실제로 작성된 재현 테스트 중 가장 최근 파일을 쓴다."""
+    if (ws.root / path).is_file():
+        return path
+    written = sorted(ws.repro_tests.glob("test_*.py"), key=lambda p: p.stat().st_mtime)
+    return f"{config.REPRO_DIRNAME}/{written[-1].name}" if written else path
+
+
+def _failed_assertions(result: dict) -> str:
+    """실패한 단언의 코드 줄만 (값은 빼서 정답 구현의 출력을 알려 주지 않는다)."""
+    lines = []
+    for f in result["failed"]:
+        stmt = next((ln.lstrip(">").strip() for ln in f["trace"].splitlines() if ln.startswith(">")), "")
+        lines.append(f"{f['test'].split('::')[-1]}: {stmt}")
+    return "; ".join(lines)
 
 
 def verify_repro(ws: Workspace, path: str, ticket: Ticket | None = None) -> str | None:
@@ -52,10 +84,9 @@ def verify_repro(ws: Workspace, path: str, ticket: Ticket | None = None) -> str 
         if "error" in ref:
             return f"재현 테스트 실행 오류 (업무 규칙대로 고친 코드): {ref['error']}"
         if ref["failed"]:
-            names = ", ".join(f["test"].split("::")[-1] for f in ref["failed"])
-            return (f"재현 테스트의 기대값이 업무 규칙과 다름: 업무 규칙대로 올바르게 고친 코드에서도 실패한다 "
-                    f"({names}). search_rules로 찾은 규칙을 모두 적용해 기대값을 다시 계산하고, "
-                    "확신할 수 없는 단언은 넣지 않는다.")
+            return (f"재현 테스트의 기대값이 업무 규칙과 다름: 업무 규칙대로 올바르게 고친 코드에서도 실패하는 단언 "
+                    f"[{_failed_assertions(ref)}]. 이 단언을 빼거나, search_rules로 찾은 규칙으로 기대값을 다시 "
+                    "계산한다. 티켓 증상과 직접 관계없는 추가 검증은 넣지 않는다.")
     return None
 
 
@@ -71,13 +102,18 @@ def _work_diff(ws: Workspace) -> str:
     return "".join(parts)
 
 
-def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None]) -> None:
+def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None],
+                   options: RunOptions) -> None:
     feedback = None
+    if not state.prediction:  # 화면·평가용 (분석이 실패해도 모델 정확도를 집계할 수 있게 먼저 저장)
+        prediction = predict_fault_location(state.ticket.text, 3)
+        state.prediction = prediction if isinstance(prediction, list) else []
     while state.analysis_tries < config.MAX_ANALYSIS_TRIES:
         state.analysis_tries += 1
         progress(f"분석 에이전트 실행 ({state.analysis_tries}/{config.MAX_ANALYSIS_TRIES})")
-        result = run_agent(client, ANALYSIS, analysis_input(state.ticket, feedback), ctx)
+        result = run_agent(client, _analysis_spec(options), analysis_input(state.ticket, feedback), ctx)
         state.analysis = result.output
+        state.analysis.repro_test_path = resolve_repro_path(ctx.ws, state.analysis.repro_test_path)
         problem = verify_repro(ctx.ws, state.analysis.repro_test_path, state.ticket)
         if problem is None and isinstance(read_method(ctx.ws, state.analysis.final_method), dict):
             problem = f"final_method가 대상 프로젝트에 없음: {state.analysis.final_method}"
@@ -85,15 +121,14 @@ def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress
                       detail=problem or "재현 테스트 원본 실패 확인")
         if problem is None:
             state.repro_verified = True
-            prediction = predict_fault_location(state.ticket.text, 3)  # 화면에 모델 예측과 판단을 나란히
-            state.prediction = prediction if isinstance(prediction, list) else []
             return
         progress(f"재현 확인 실패: {problem}")
         feedback = problem
     raise _HumanReview(f"분석 실패: {feedback}")
 
 
-def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None]) -> None:
+def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None],
+                   options: RunOptions) -> None:
     analysis = state.analysis
     method = analysis.final_method if analysis else state.ticket.method
     repro = [analysis.repro_test_path] if analysis else []
@@ -106,9 +141,12 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         except AgentStopped as e:
             attempt.error = str(e)
         attempt.diff = _work_diff(ctx.ws)
-        progress("공격 에이전트 실행")
-        attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx)
-        progress(f"공격 발견 {len(attempt.attack.verified())}건 (확인됨) → 판정 (코드)")
+        if options.use_attack:
+            progress("공격 에이전트 실행")
+            attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx)
+            progress(f"공격 발견 {len(attempt.attack.verified())}건 (확인됨) → 판정 (코드)")
+        else:
+            progress("공격 단계 생략 (Ablation) → 판정 (코드)")
         attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro, attempt.attack)
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
@@ -129,10 +167,12 @@ def run_ticket(
     runs_dir: Path | None = None,
     restart: bool = False,
     progress: Callable[[str], None] = lambda msg: None,
+    options: RunOptions | None = None,
 ) -> TicketState:
     """티켓을 끝까지 처리한다. state.json이 있으면 끝난 단계는 건너뛰고 이어서 실행한다."""
     if ticket.type != "defect" and not ticket.method:
         raise ValueError(f"{ticket.type} 유형 티켓에는 대상 함수(method)가 필요함: {ticket.ticket_id}")
+    options = options or RunOptions()
     ws = prepare_workspace(ticket.ticket_id, source=source, runs_dir=runs_dir, overwrite=restart)
     state = None if restart else TicketState.load(ws.state_path)
     if state is not None and state.status in FINAL:
@@ -146,10 +186,10 @@ def run_ticket(
         if ticket.type == "defect" and not state.repro_verified:
             state.status = "analyzing"
             state.save(ws.state_path)
-            _analysis_node(client, state, ctx, progress)
+            _analysis_node(client, state, ctx, progress, options)
             state.save(ws.state_path)
         state.status = "fixing"
-        _fix_and_judge(client, state, ctx, progress)
+        _fix_and_judge(client, state, ctx, progress, options)
         state.status = "approval_pending"
     except _HumanReview as e:
         state.status, state.human_review_reason = "human_review", str(e)

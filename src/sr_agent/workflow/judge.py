@@ -16,6 +16,7 @@
 
 import ast
 import json
+import shutil
 
 from sr_agent import config
 from sr_agent.tools.attack import compare_versions
@@ -86,8 +87,27 @@ def _short(value, limit: int = 160) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def hidden_tests_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
+    """E2E: 에이전트에게 숨긴 정답 테스트를 수정본에서 돌린다 (작업본 + 대상 프로젝트 원래 테스트)."""
+    dest = ws.root / "hidden"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(ws.work, dest, ignore=shutil.ignore_patterns(*config.COPY_IGNORE_PATTERNS))
+    shutil.rmtree(dest / config.TARGET_TEST_SUBDIR)
+    shutil.copytree(config.TARGET_ROOT / config.TARGET_TEST_SUBDIR, dest / config.TARGET_TEST_SUBDIR,
+                    ignore=shutil.ignore_patterns(*config.COPY_IGNORE_PATTERNS))
+    tests = list(dict.fromkeys(t.split("[")[0] for t in spec.hidden_tests))
+    result = run_tests(ws, "hidden", tests, timeout=config.JUDGE_TEST_TIMEOUT_S)
+    ok = "error" not in result and not result["failed"] and result["passed"] > 0
+    data = {} if "error" in result else {"passed": result["passed"],
+                                         "failed": len(result["failed"]) + result.get("omitted", 0)}
+    return JudgeCheck(name="hidden_tests_pass", passed=ok, detail=_summ(result), data=data)
+
+
 def reference_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
     """수정본을 정답 구현과 Hypothesis 입력으로 비교한다 (코드만)."""
+    if spec.strategy is None:
+        return JudgeCheck(name="reference_property", passed=None, detail="입력 생성 규칙 없음 — Hypothesis 비교 미평가")
     src = config.TARGET_SRC_SUBDIR
     try:
         ref = build_reference(ws, spec)
@@ -205,6 +225,8 @@ def judge_defect(ws: Workspace, method: str, repro_tests: list[str], spec: Judge
         ok = "error" not in patched and not patched["failed"] and patched["passed"] > 0
         checks.append(JudgeCheck(name="repro_patched_passes", passed=ok, detail=_summ(patched)))
     checks += [existing_tests_check(ws), scope_check(ws, method)]
+    if spec is not None and spec.hidden_tests:
+        checks.append(hidden_tests_check(ws, spec))
     if spec is None or spec.reference is None:
         checks.append(JudgeCheck(name="reference_property", passed=None,
                                  detail="판정 명세(정답 구현) 없음 — 결함 영역 밖 입력 동일성 미평가"))
