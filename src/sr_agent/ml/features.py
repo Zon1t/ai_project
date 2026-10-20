@@ -66,6 +66,16 @@ class Embedder:
         return np.stack([cache[k] for k in keys])
 
 
+_embedders: dict[str, Embedder] = {}
+
+
+def get_embedder(key: str = config.EMBED_MODEL) -> Embedder:
+    """프로세스 안에서 모델별로 하나만 만든다 (bge-m3는 메모리 약 2GB)."""
+    if key not in _embedders:
+        _embedders[key] = Embedder(key)
+    return _embedders[key]
+
+
 def embedding_scores(embedder: Embedder, ticket_texts: list[str], candidates: list[Candidate]) -> np.ndarray:
     """[티켓 수, 후보 수] 임베딩 코사인 유사도."""
     return embedder.encode(ticket_texts) @ embedder.encode([c.document for c in candidates]).T

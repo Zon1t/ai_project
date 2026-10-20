@@ -1,0 +1,554 @@
+[
+  {
+    "rule_id": "SEC-SQL-01",
+    "category": "SEC",
+    "title": "SQL은 문자열 결합이 아니라 파라미터 바인딩으로 만든다",
+    "description": "f-string, % 포맷, + 결합으로 사용자 입력을 SQL 문에 넣으면 SQL 인젝션이 가능하다. 값은 반드시 ? 자리표시자와 파라미터 튜플로 넘긴다. 정상 입력의 조회 결과는 바꾸지 않는다.",
+    "bad_example": "sql = f\"SELECT * FROM customers WHERE name = '{name}'\"\nreturn db.query_all(conn, sql)",
+    "good_example": "sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"\nreturn db.query_all(conn, sql, (name,))",
+    "severity": "HIGH",
+    "check": "bandit B608 + AST: SQL 문자열에 f-string·%·+ 결합",
+    "keywords": [
+      "(?i)f[\\\"'](SELECT|INSERT|UPDATE|DELETE)\\b",
+      "(?i)(SELECT|INSERT|UPDATE|DELETE)\\b[^\\\"'\\n]*[\\\"']\\s*%",
+      "(?i)(SELECT|INSERT|UPDATE|DELETE)\\b[^\\\"'\\n]*[\\\"']\\s*\\+"
+    ]
+  },
+  {
+    "rule_id": "SEC-SQL-02",
+    "category": "SEC",
+    "title": "LIKE 검색어의 와일드카드는 이스케이프한다",
+    "description": "바인딩을 써도 사용자가 입력한 % 와 _ 는 LIKE에서 와일드카드로 동작한다. 검색어의 \\, %, _ 를 이스케이프하고 ESCAPE 절을 명시한다.",
+    "bad_example": "db.query_all(conn, \"SELECT * FROM customers WHERE name LIKE ?\", (\"%\" + keyword + \"%\",))",
+    "good_example": "escaped = keyword.replace(\"\\\\\", \"\\\\\\\\\").replace(\"%\", \"\\\\%\").replace(\"_\", \"\\\\_\")\ndb.query_all(conn, \"SELECT * FROM customers WHERE name LIKE ? ESCAPE '\\\\'\", (f\"%{escaped}%\",))",
+    "severity": "MEDIUM",
+    "check": "AST: LIKE 절에 ESCAPE 없음",
+    "keywords": [
+      "(?i)\\bLIKE\\b"
+    ]
+  },
+  {
+    "rule_id": "SEC-SQL-03",
+    "category": "SEC",
+    "title": "테이블·컬럼·정렬 기준 같은 식별자는 허용 목록으로 검사한다",
+    "description": "식별자는 ? 로 바인딩할 수 없다. ORDER BY 컬럼을 바인딩하면 상수 정렬이 되어 정렬이 조용히 사라진다. 허용 목록에 있는 값만 문자열로 넣는다.",
+    "bad_example": "sql = \"SELECT * FROM orders ORDER BY %s\" % sort_key",
+    "good_example": "SORT_KEYS = {\"created\": \"created_at\", \"amount\": \"total\"}\ncolumn = SORT_KEYS.get(sort_key)\nif column is None:\n    raise ValueError(\"허용되지 않은 정렬 기준\")\nsql = f\"SELECT * FROM orders ORDER BY {column}\"",
+    "severity": "HIGH",
+    "check": "AST: ORDER BY·테이블명에 외부 입력 결합",
+    "keywords": [
+      "(?i)ORDER\\s+BY\\b[^\\\"'\\n]*[\\\"']\\s*[%+]",
+      "(?i)ORDER\\s+BY\\s*\\{"
+    ]
+  },
+  {
+    "rule_id": "SEC-LOG-01",
+    "category": "SEC",
+    "title": "개인정보(이름·이메일·전화번호)를 로그에 남기지 않는다",
+    "description": "운영 로그는 여러 사람이 열람하므로 개인정보를 원문으로 남기지 않는다. 필요하면 고객 ID나 마스킹한 값만 남긴다.",
+    "bad_example": "logger.info(\"고객 등록 요청: name=%s, email=%s, phone=%s\", name, email, phone)",
+    "good_example": "logger.info(\"고객 등록 요청: customer_id=%s, phone=%s\", customer_id, mask_phone(phone))",
+    "severity": "HIGH",
+    "check": "AST: logger 호출 인자에 name·email·phone",
+    "keywords": [
+      "logger\\.\\w+\\([^)]*\\b(name|email|phone)\\b"
+    ]
+  },
+  {
+    "rule_id": "SEC-LOG-02",
+    "category": "SEC",
+    "title": "카드번호는 로그·화면·예외 어디에도 원문으로 남기지 않는다",
+    "description": "카드번호는 앞 4자리와 뒤 4자리 외에는 마스킹한다. 결제 로그에는 결제 ID만 남긴다.",
+    "bad_example": "logger.info(\"결제 요청: order_id=%s, card=%s\", order_id, card_number)",
+    "good_example": "logger.info(\"결제 요청: order_id=%s, card=%s\", order_id, mask_card_number(card_number))",
+    "severity": "HIGH",
+    "check": "AST: logger·raise 인자에 card_number",
+    "keywords": [
+      "(logger\\.\\w+|raise \\w+)\\([^)]*card"
+    ]
+  },
+  {
+    "rule_id": "SEC-LOG-03",
+    "category": "SEC",
+    "title": "SQL 문과 조회 결과 행을 로그에 그대로 남기지 않는다",
+    "description": "SQL 문에는 검색 조건(개인정보)이, 결과 행에는 고객 정보가 들어 있다. 건수나 ID만 남긴다.",
+    "bad_example": "logger.info(\"우수 고객 추출: %s\", rows)",
+    "good_example": "logger.info(\"우수 고객 추출: %d건\", len(rows))",
+    "severity": "MEDIUM",
+    "check": "AST: logger 인자에 sql·rows 변수",
+    "keywords": [
+      "logger\\.\\w+\\([^)]*\\b(sql|rows)\\b"
+    ]
+  },
+  {
+    "rule_id": "SEC-ERR-01",
+    "category": "SEC",
+    "title": "오류 응답에 스택트레이스와 내부 예외 메시지를 넣지 않는다",
+    "description": "스택트레이스는 파일 경로·코드·내부 구조를 노출한다. 응답에는 오류 코드와 일반 메시지만 넣고, 상세 내용은 서버 로그에만 남긴다.",
+    "bad_example": "return {\"success\": False, \"error\": str(exc), \"trace\": traceback.format_exc()}",
+    "good_example": "logger.exception(\"처리 실패: error_id=%s\", error_id)\nreturn {\"success\": False, \"error\": \"처리 중 오류가 발생했습니다.\", \"error_id\": error_id}",
+    "severity": "HIGH",
+    "check": "AST: 반환 dict에 traceback.format_* 결과",
+    "keywords": [
+      "traceback\\.format_",
+      "[\\\"']trace[\\\"']\\s*:"
+    ]
+  },
+  {
+    "rule_id": "SEC-ERR-02",
+    "category": "SEC",
+    "title": "예외 메시지에 개인정보·결제정보를 넣지 않는다",
+    "description": "예외 메시지는 오류 응답과 로그로 퍼진다. 이메일·전화번호·카드번호·결제 정보 전체를 넣지 않고 ID만 넣는다.",
+    "bad_example": "raise ValueError(\"이미 가입된 이메일: %s\" % email)",
+    "good_example": "raise ValueError(\"이미 가입된 이메일입니다\")",
+    "severity": "MEDIUM",
+    "check": "AST: raise 메시지에 email·phone·card·결제 dict",
+    "keywords": [
+      "raise \\w+\\([^)]*\\b(email|phone|card)\\b"
+    ]
+  },
+  {
+    "rule_id": "SEC-CRY-01",
+    "category": "SEC",
+    "title": "MD5·SHA-1을 쓰지 않는다",
+    "description": "MD5와 SHA-1은 충돌 공격이 알려져 있다. 식별자 생성·무결성 검사에는 SHA-256 이상을 쓴다.",
+    "bad_example": "return \"CP\" + hashlib.md5(raw.encode()).hexdigest()[:10].upper()",
+    "good_example": "return \"CP\" + hashlib.sha256(raw.encode()).hexdigest()[:10].upper()",
+    "severity": "MEDIUM",
+    "check": "bandit B303·B324",
+    "keywords": [
+      "hashlib\\.(md5|sha1)\\b"
+    ]
+  },
+  {
+    "rule_id": "SEC-CRY-02",
+    "category": "SEC",
+    "title": "쿠폰 코드·토큰처럼 추측되면 안 되는 값은 secrets로 만든다",
+    "description": "random 모듈과 시각 기반 해시는 예측할 수 있다. 추측되면 안 되는 값은 secrets.token_hex 등으로 만든다.",
+    "bad_example": "raw = \"%s-%s\" % (customer_id, datetime.utcnow())\ncode = hashlib.md5(raw.encode()).hexdigest()",
+    "good_example": "code = \"CP\" + secrets.token_hex(5).upper()",
+    "severity": "MEDIUM",
+    "check": "bandit B311 + AST: 시각 기반 코드 생성",
+    "keywords": [
+      "\\brandom\\.(random|randint|choice)\\(",
+      "md5\\([^)]*(time|now)"
+    ]
+  },
+  {
+    "rule_id": "SEC-STO-01",
+    "category": "SEC",
+    "title": "카드번호 원문을 DB에 저장하지 않는다",
+    "description": "카드번호는 PG사 토큰이나 마스킹한 값만 저장한다. 원문 저장은 유출 시 피해가 가장 크다.",
+    "bad_example": "db.insert(conn, \"payments\", {\"card_number\": card_number, ...})",
+    "good_example": "db.insert(conn, \"payments\", {\"card_masked\": mask_card_number(card_number), ...})",
+    "severity": "HIGH",
+    "check": "AST: insert 대상에 card_number 키",
+    "keywords": [
+      "[\\\"']card_number[\\\"']\\s*:"
+    ]
+  },
+  {
+    "rule_id": "SEC-INP-01",
+    "category": "SEC",
+    "title": "외부 입력을 eval·exec·pickle로 처리하지 않는다",
+    "description": "eval·exec·pickle.loads는 임의 코드 실행으로 이어진다. 숫자 변환은 int()·Decimal()로, 구조화 데이터는 json으로 처리하고 형식을 검증한다.",
+    "bad_example": "amount = eval(request_value)",
+    "good_example": "amount = int(request_value)\nif amount < 0:\n    raise ValueError(\"금액은 0 이상\")",
+    "severity": "HIGH",
+    "check": "bandit B307·B301",
+    "keywords": [
+      "\\beval\\(",
+      "\\bexec\\(",
+      "pickle\\.loads?\\("
+    ]
+  },
+  {
+    "rule_id": "DEP-DT-01",
+    "category": "DEP",
+    "title": "datetime.utcnow() 대신 datetime.now(timezone.utc)를 쓴다",
+    "description": "datetime.utcnow()는 Python 3.12부터 지원 종료 예고(DeprecationWarning)다. 시간대 정보가 있는 datetime.now(timezone.utc)로 바꾼다. 기존 코드가 naive UTC를 기대하면 출력이 같도록 맞춘다.",
+    "bad_example": "now = datetime.utcnow()",
+    "good_example": "now = datetime.now(timezone.utc)  # naive가 필요하면 .replace(tzinfo=None)",
+    "severity": "MEDIUM",
+    "check": "ruff DTZ003 + 테스트 -W error::DeprecationWarning",
+    "keywords": [
+      "\\butcnow\\("
+    ]
+  },
+  {
+    "rule_id": "DEP-DT-02",
+    "category": "DEP",
+    "title": "datetime.utcfromtimestamp() 대신 fromtimestamp(ts, timezone.utc)를 쓴다",
+    "description": "utcfromtimestamp()도 Python 3.12부터 지원 종료 예고다.",
+    "bad_example": "dt = datetime.utcfromtimestamp(ts)",
+    "good_example": "dt = datetime.fromtimestamp(ts, timezone.utc)",
+    "severity": "MEDIUM",
+    "check": "ruff DTZ004",
+    "keywords": [
+      "\\butcfromtimestamp\\("
+    ]
+  },
+  {
+    "rule_id": "DEP-TZ-01",
+    "category": "DEP",
+    "title": "pytz 대신 표준 라이브러리 zoneinfo를 쓴다",
+    "description": "Python 3.9부터 zoneinfo가 표준이다. 외부 의존성 pytz를 제거한다. Windows에서는 tzdata 패키지가 시간대 DB를 제공한다. 쓰지 않게 된 import pytz도 지운다.",
+    "bad_example": "import pytz\nkst = pytz.timezone(\"Asia/Seoul\")",
+    "good_example": "from zoneinfo import ZoneInfo\nKST = ZoneInfo(\"Asia/Seoul\")",
+    "severity": "MEDIUM",
+    "check": "AST: import pytz·pytz.* 사용",
+    "keywords": [
+      "\\bpytz\\b"
+    ]
+  },
+  {
+    "rule_id": "DEP-TZ-02",
+    "category": "DEP",
+    "title": "pytz의 localize·normalize 대신 aware datetime을 직접 만든다",
+    "description": "zoneinfo는 localize가 없다. naive UTC는 replace(tzinfo=timezone.utc)로 표시하고 astimezone으로 바꾼다. 일광절약시간이 있는 시간대는 결과가 같은지 확인한다.",
+    "bad_example": "local = pytz.utc.localize(order_dt).astimezone(kst)",
+    "good_example": "local = order_dt.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(\"Asia/Seoul\"))",
+    "severity": "MEDIUM",
+    "check": "AST: .localize(·.normalize( 호출",
+    "keywords": [
+      "\\.localize\\(",
+      "\\.normalize\\("
+    ]
+  },
+  {
+    "rule_id": "DEP-SQL-01",
+    "category": "DEP",
+    "title": "sqlite3 기본 datetime 어댑터에 기대지 않는다",
+    "description": "Python 3.12부터 sqlite3의 기본 date·datetime 어댑터와 변환기가 지원 종료 예고다. datetime은 명시적으로 문자열(예: \"%Y-%m-%d %H:%M:%S\")로 바꿔 저장하고 읽을 때 직접 파싱한다.",
+    "bad_example": "conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)\ndb.insert(conn, \"orders\", {\"created_at\": now})",
+    "good_example": "db.insert(conn, \"orders\", {\"created_at\": now.strftime(DATE_FORMAT)})",
+    "severity": "LOW",
+    "check": "테스트 -W error::DeprecationWarning",
+    "keywords": [
+      "detect_types",
+      "PARSE_DECLTYPES"
+    ]
+  },
+  {
+    "rule_id": "DEP-TYP-01",
+    "category": "DEP",
+    "title": "typing.Dict·List·Tuple 대신 내장 dict·list·tuple을 쓴다",
+    "description": "Python 3.9부터 내장 컬렉션을 타입 힌트에 바로 쓸 수 있다(PEP 585). typing의 별칭은 지원 종료 예고다.",
+    "bad_example": "from typing import Dict, List\ndef f(items):\n    # type: (List[Dict]) -> int",
+    "good_example": "def f(items: list[dict]) -> int:",
+    "severity": "LOW",
+    "check": "ruff UP006·UP035",
+    "keywords": [
+      "from typing import [^\\n]*\\b(Dict|List|Tuple|Set)\\b",
+      "\\b(Dict|List|Tuple)\\["
+    ]
+  },
+  {
+    "rule_id": "DEP-TYP-02",
+    "category": "DEP",
+    "title": "Optional[X]·Union[X, Y] 대신 X | None·X | Y를 쓴다",
+    "description": "Python 3.10부터 | 로 합집합 타입을 쓴다(PEP 604).",
+    "bad_example": "def f(x):\n    # type: (Optional[int]) -> int",
+    "good_example": "def f(x: int | None) -> int:",
+    "severity": "LOW",
+    "check": "ruff UP007·UP045",
+    "keywords": [
+      "\\bOptional\\[",
+      "\\bUnion\\["
+    ]
+  },
+  {
+    "rule_id": "DEP-ENC-01",
+    "category": "DEP",
+    "title": "# -*- coding: utf-8 -*- 선언은 쓰지 않는다",
+    "description": "Python 3의 소스 기본 인코딩은 UTF-8이라 선언이 필요 없다.",
+    "bad_example": "# -*- coding: utf-8 -*-",
+    "good_example": "(선언 없이 시작)",
+    "severity": "LOW",
+    "check": "ruff UP009",
+    "keywords": [
+      "coding[:=]\\s*utf-?8"
+    ]
+  },
+  {
+    "rule_id": "STY-01",
+    "category": "STY",
+    "title": "공개 함수는 인자와 반환값에 타입 힌트를 단다",
+    "description": "밑줄로 시작하지 않는 함수는 모든 인자와 반환값에 인라인 타입 힌트를 단다. 기본값이 None이면 X | None으로 쓴다. 함수 이름·인자 이름·순서·기본값은 바꾸지 않는다.",
+    "bad_example": "def calc_due_date(order_dt=None):",
+    "good_example": "def calc_due_date(order_dt: datetime | None = None) -> date:",
+    "severity": "MEDIUM",
+    "check": "AST: 공개 함수 인자·반환 annotation (ruff ANN001·ANN201 기준)",
+    "keywords": [
+      "\\ndef [a-z]\\w*\\([^):]*\\)\\s*:",
+      "^def [a-z]\\w*\\([^):]*\\)\\s*:"
+    ]
+  },
+  {
+    "rule_id": "STY-02",
+    "category": "STY",
+    "title": "# type: 주석 대신 인라인 타입 힌트를 쓴다",
+    "description": "타입 주석(# type:)은 Python 2 호환용이다. 함수 시그니처에 직접 타입 힌트를 쓰고 주석은 지운다.",
+    "bad_example": "def apply_coupons(order_amount, coupons):\n    # type: (int, List[Dict]) -> int",
+    "good_example": "def apply_coupons(order_amount: int, coupons: list[dict]) -> int:",
+    "severity": "LOW",
+    "check": "tokenize: 함수 범위의 # type: 주석",
+    "keywords": [
+      "#\\s*type:"
+    ]
+  },
+  {
+    "rule_id": "STY-03",
+    "category": "STY",
+    "title": "% 문자열 포맷 대신 f-string을 쓴다",
+    "description": "% 포맷은 인자 개수·순서 실수가 잦다. 문자열 조립은 f-string을 쓴다. 단, SQL에는 문자열 조립 자체를 쓰지 않는다(SEC-SQL-01). logging 호출의 지연 포맷(logger.info(\"%s\", x))은 예외로 허용한다.",
+    "bad_example": "raise ValueError(\"주문 없음: %s\" % order_id)",
+    "good_example": "raise ValueError(f\"주문 없음: {order_id}\")",
+    "severity": "LOW",
+    "check": "ruff UP031",
+    "keywords": [
+      "[\\\"']\\s*%\\s*[\\w(]"
+    ]
+  },
+  {
+    "rule_id": "STY-04",
+    "category": "STY",
+    "title": "공개 함수에는 docstring을 단다",
+    "description": "공개 함수는 한 줄 이상의 docstring으로 하는 일을 설명한다. 업무 규칙(금액 기준, 기간 등)이 있으면 함께 적는다.",
+    "bad_example": "def calc_commission(amount, seller_grade=\"BASIC\"):\n    return amount * rate // 100",
+    "good_example": "def calc_commission(amount: int, seller_grade: str = \"BASIC\") -> int:\n    \"\"\"판매 수수료(원, 절사).\"\"\"\n    return amount * rate // 100",
+    "severity": "LOW",
+    "check": "AST: 공개 함수 docstring (ruff D103 기준)",
+    "keywords": []
+  },
+  {
+    "rule_id": "STY-05",
+    "category": "STY",
+    "title": "print 대신 logging을 쓴다",
+    "description": "print는 운영 로그 수집에서 빠지고 레벨을 조절할 수 없다. 모듈별 logger를 쓴다.",
+    "bad_example": "print(\"정산 완료\", settlement_id)",
+    "good_example": "logger.info(\"정산 완료: settlement_id=%s\", settlement_id)",
+    "severity": "LOW",
+    "check": "ruff T201",
+    "keywords": [
+      "\\bprint\\("
+    ]
+  },
+  {
+    "rule_id": "STY-06",
+    "category": "STY",
+    "title": "맨 except:를 쓰지 않는다",
+    "description": "except: 는 KeyboardInterrupt까지 삼키고 결함을 숨긴다. 처리할 예외 타입을 명시한다.",
+    "bad_example": "try:\n    return int(value)\nexcept:\n    return default",
+    "good_example": "try:\n    return int(value)\nexcept (TypeError, ValueError):\n    return default",
+    "severity": "MEDIUM",
+    "check": "ruff E722",
+    "keywords": [
+      "except\\s*:"
+    ]
+  },
+  {
+    "rule_id": "BIZ-CPN-01",
+    "category": "BIZ",
+    "title": "복수 쿠폰의 최소 주문 금액은 직전 쿠폰까지 적용된 금액으로 판단한다",
+    "description": "쿠폰을 여러 장 쓸 때, 각 쿠폰의 최소 주문 금액(min_order) 조건은 원래 주문 금액이 아니라 앞선 쿠폰까지 적용된 현재 금액 기준으로 판단한다. 조건을 만족하지 못한 쿠폰은 건너뛴다.",
+    "bad_example": "if not is_coupon_applicable(order_amount, coupon):   # 원래 주문 금액으로 판단\n    return current_amount",
+    "good_example": "if not is_coupon_applicable(current_amount, coupon):  # 직전 쿠폰까지 적용된 금액으로 판단\n    return current_amount",
+    "severity": "HIGH",
+    "check": "업무 검토 + 재현 테스트",
+    "keywords": [
+      "is_coupon_applicable\\(",
+      "\\bmin_order\\b"
+    ]
+  },
+  {
+    "rule_id": "BIZ-CPN-02",
+    "category": "BIZ",
+    "title": "쿠폰 적용 후 결제 금액은 0원 아래로 내려가지 않는다",
+    "description": "할인액이 현재 금액보다 크면 결제 금액은 0원이 된다(하한 0원). 결제·정산 금액이 음수가 되면 안 된다.",
+    "bad_example": "return current_amount - discount",
+    "good_example": "return max(0, current_amount - discount)",
+    "severity": "HIGH",
+    "check": "업무 검토 + 속성 테스트(결과 ≥ 0)",
+    "keywords": [
+      "current_amount\\s*-\\s*discount",
+      "def apply_coupon\\b"
+    ]
+  },
+  {
+    "rule_id": "BIZ-CPN-03",
+    "category": "BIZ",
+    "title": "사용 처리된 쿠폰과 만료된 쿠폰은 쓸 수 없다",
+    "description": "쿠폰 검증은 존재 → 사용 여부 → 만료 → 소유자 순으로 하고, 결제가 끝나면 사용 처리한다. 같은 쿠폰 코드는 한 주문에 한 번만 적용한다.",
+    "bad_example": "coupons = [find_coupon(conn, code) for code in codes]   # 중복 코드·사용 여부 미검사",
+    "good_example": "coupons = [c for c in (find_coupon(conn, code) for code in dict.fromkeys(codes))\n           if validate_coupon(c, customer_id, now)[0]]",
+    "severity": "HIGH",
+    "check": "업무 검토",
+    "keywords": [
+      "validate_coupon\\(",
+      "mark_used\\(",
+      "\\bused\\b"
+    ]
+  },
+  {
+    "rule_id": "BIZ-AMT-01",
+    "category": "BIZ",
+    "title": "금액은 원 단위 정수로 계산하고 할인·수수료는 절사한다",
+    "description": "금액 계산에 float를 쓰지 않는다. 비율 계산은 정수 곱셈 후 // 로 나누고, 할인액은 10원 단위로 절사한다(round_down_won).",
+    "bad_example": "discount = amount * rate / 100",
+    "good_example": "discount = round_down_won(amount * rate // 100)",
+    "severity": "MEDIUM",
+    "check": "AST: 금액 변수에 / 나눗셈·float()",
+    "keywords": [
+      "\\bfloat\\(",
+      "round_down_won\\(",
+      "\\* ?rate ?/ "
+    ]
+  },
+  {
+    "rule_id": "BIZ-AMT-02",
+    "category": "BIZ",
+    "title": "할인은 등급 할인 → 쿠폰 순으로 적용하고 등급 할인은 50%를 넘지 않는다",
+    "description": "최종 결제 금액은 상품 합계에서 등급 할인을 먼저 빼고, 그 금액에 쿠폰을 순서대로 적용한다. 등급 할인액은 주문 금액의 MAX_DISCOUNT_RATE(50%)를 넘지 않는다.",
+    "bad_example": "after_coupon = apply_coupons(subtotal, coupons)\nreturn after_coupon - calc_grade_discount(after_coupon, grade)",
+    "good_example": "after_grade = subtotal - calc_grade_discount(subtotal, grade)\nreturn apply_coupons(after_grade, coupons)",
+    "severity": "HIGH",
+    "check": "업무 검토",
+    "keywords": [
+      "calc_final_amount\\(",
+      "calc_grade_discount\\(",
+      "cap_discount\\("
+    ]
+  },
+  {
+    "rule_id": "BIZ-AMT-03",
+    "category": "BIZ",
+    "title": "부가세는 포함가를 11로 나눈 몫이고 공급가는 포함가에서 부가세를 뺀 값이다",
+    "description": "부가세 포함 금액에서 부가세 = 금액 // 11, 공급가 = 금액 - 부가세로 계산한다. 면세 품목은 분리해 계산한다.",
+    "bad_example": "vat = round(amount * 0.1)",
+    "good_example": "vat = amount // 11\nsupply = amount - vat",
+    "severity": "MEDIUM",
+    "check": "업무 검토",
+    "keywords": [
+      "\\bVAT\\w*",
+      "\\bvat\\b"
+    ]
+  },
+  {
+    "rule_id": "BIZ-SET-01",
+    "category": "BIZ",
+    "title": "정산 지급일은 주문일(한국 시간)의 월말 마감 후 5영업일째다",
+    "description": "주문 시각(UTC)을 한국 시간으로 바꿔 주문 월을 정하고, 그 달 말일 다음부터 주말·공휴일을 빼고 5영업일째에 지급한다. 월 경계(UTC 15시 이후)는 한국 시간으로 다음 날이다.",
+    "bad_example": "month_end = last_day(order_dt.year, order_dt.month)   # UTC 기준 월",
+    "good_example": "local = to_kst(order_dt)\nmonth_end = date(local.year, local.month, last_day_of_month(local.year, local.month))\nreturn add_business_days(month_end, SETTLEMENT_BUSINESS_DAYS)",
+    "severity": "HIGH",
+    "check": "업무 검토 + 경계 테스트(월말·공휴일)",
+    "keywords": [
+      "calc_due_date\\(",
+      "add_business_days\\(",
+      "SETTLEMENT_BUSINESS_DAYS"
+    ]
+  },
+  {
+    "rule_id": "BIZ-SET-02",
+    "category": "BIZ",
+    "title": "정산 금액은 할인 후 결제 금액에서 PG 수수료와 판매 수수료를 뺀 값이다",
+    "description": "수수료는 할인 전 상품 합계가 아니라 고객이 실제 결제한 금액 기준으로 계산한다. 정산 금액이 음수면 정산을 보류하고 확인한다.",
+    "bad_example": "commission = calc_commission(subtotal, seller_grade)",
+    "good_example": "paid = calc_final_amount(subtotal, grade, coupons)\nreturn paid - calc_pg_fee(paid, method) - calc_commission(paid, seller_grade)",
+    "severity": "HIGH",
+    "check": "업무 검토",
+    "keywords": [
+      "calc_settlement_amount\\(",
+      "calc_commission\\(",
+      "calc_pg_fee\\("
+    ]
+  },
+  {
+    "rule_id": "BIZ-PAY-01",
+    "category": "BIZ",
+    "title": "PG 수수료는 결제수단별 천분율로 계산하고 지원하지 않는 수단은 거부한다",
+    "description": "카드 25‰, 계좌이체 10‰, 포인트 0‰를 결제 금액에 곱한 뒤 1,000으로 나눈 몫이다. 표에 없는 결제수단은 0원으로 처리하지 않고 오류로 거부한다.",
+    "bad_example": "rate = config.PG_FEE_RATES.get(method, 0)",
+    "good_example": "rate = config.PG_FEE_RATES.get(method)\nif rate is None:\n    raise ValueError(f\"지원하지 않는 결제수단: {method}\")\nreturn amount * rate // 1000",
+    "severity": "MEDIUM",
+    "check": "업무 검토",
+    "keywords": [
+      "calc_pg_fee\\(",
+      "PG_FEE_RATES"
+    ]
+  },
+  {
+    "rule_id": "BIZ-REF-01",
+    "category": "BIZ",
+    "title": "환불 수수료는 결제 후 7일 이내 무료, 30일 이내 5%, 이후 10%다",
+    "description": "경과 일수는 결제 시각부터 센다. 7일째와 30일째는 각각 앞 구간에 포함한다(이하). 부분 환불은 남은 결제 금액을 넘을 수 없다.",
+    "bad_example": "if days_since_paid < 7:\n    return 0",
+    "good_example": "if days_since_paid <= 7:\n    return 0\nif days_since_paid <= 30:\n    return amount * 5 // 100\nreturn amount * 10 // 100",
+    "severity": "MEDIUM",
+    "check": "업무 검토 + 경계 테스트(7·8·30·31일)",
+    "keywords": [
+      "calc_refund_fee\\(",
+      "days_since_paid",
+      "partial_refund\\("
+    ]
+  },
+  {
+    "rule_id": "BIZ-ORD-01",
+    "category": "BIZ",
+    "title": "주문 상태는 현재 상태 기준의 허용 전이표로만 바꾼다",
+    "description": "CREATED → PAID·CANCELLED, PAID → SHIPPED·CANCELLED, SHIPPED → DELIVERED만 허용한다. 허용 여부는 현재 상태를 키로 전이표에서 찾는다.",
+    "bad_example": "if new_status not in VALID_TRANSITIONS.get(new_status, []):",
+    "good_example": "if new_status not in VALID_TRANSITIONS.get(order[\"status\"], []):\n    raise ValueError(f\"상태 변경 불가: {order['status']} -> {new_status}\")",
+    "severity": "HIGH",
+    "check": "업무 검토",
+    "keywords": [
+      "VALID_TRANSITIONS",
+      "change_status\\("
+    ]
+  },
+  {
+    "rule_id": "BIZ-ORD-02",
+    "category": "BIZ",
+    "title": "배송비는 상품 합계 5만 원 이상이면 무료, 미만이면 3,000원이다",
+    "description": "기준 금액은 할인 전 상품 합계다. 정확히 50,000원이면 무료다. 상품이 없는 주문(합계 0원)은 배송비가 없다.",
+    "bad_example": "if subtotal > config.FREE_SHIPPING_THRESHOLD:\n    return 0",
+    "good_example": "if subtotal == 0 or subtotal >= config.FREE_SHIPPING_THRESHOLD:\n    return 0\nreturn config.SHIPPING_FEE",
+    "severity": "MEDIUM",
+    "check": "업무 검토 + 경계 테스트(49,999·50,000)",
+    "keywords": [
+      "calc_shipping_fee\\(",
+      "FREE_SHIPPING_THRESHOLD"
+    ]
+  },
+  {
+    "rule_id": "BIZ-TIM-01",
+    "category": "BIZ",
+    "title": "시각은 UTC로 저장하고 업무 날짜 판단은 한국 시간으로 한다",
+    "description": "DB에는 UTC 시각을 저장한다. 일 매출, 월 마감, 쿠폰 만료일처럼 날짜가 기준인 판단은 한국 시간으로 바꾼 뒤 한다.",
+    "bad_example": "if order_dt.day == 1:   # UTC 날짜로 판단",
+    "good_example": "if to_kst(order_dt).day == 1:",
+    "severity": "MEDIUM",
+    "check": "업무 검토",
+    "keywords": [
+      "to_kst\\(",
+      "\\bKST\\b",
+      "TIMEZONE_NAME"
+    ]
+  },
+  {
+    "rule_id": "BIZ-PNT-01",
+    "category": "BIZ",
+    "title": "포인트는 100포인트 단위, 1,000포인트 이상, 결제 금액의 30%까지 쓴다",
+    "description": "사용 포인트는 POINT_USE_UNIT(100) 단위여야 하고 MIN_POINT_USE(1,000) 이상이며, 결제 금액의 MAX_USE_RATE(30%)를 넘을 수 없다. 차감은 오래된 적립분부터 한다.",
+    "bad_example": "if points > amount:\n    raise ValueError(\"사용 한도 초과\")",
+    "good_example": "if points % POINT_USE_UNIT or points < MIN_POINT_USE or points > amount * MAX_USE_RATE // 100:\n    raise ValueError(\"포인트 사용 조건 위반\")",
+    "severity": "MEDIUM",
+    "check": "업무 검토 + 경계 테스트",
+    "keywords": [
+      "POINT_USE_UNIT",
+      "MAX_USE_RATE",
+      "MIN_POINT_USE"
+    ]
+  }
+]

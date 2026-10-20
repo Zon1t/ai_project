@@ -96,6 +96,15 @@ PREDICT_MAX_TOP_K = 10
 PREDICT_REASONS = 3  # SHAP 근거 개수 (F3-2)
 MAX_TICKET_CHARS = 4000  # 입력 가드: 티켓 본문 길이 상한 (PRD 7.5)
 
+# RAG (F4-1, F4-2)
+HISTORY_COLLECTION = "history"  # 장애·조치 이력 (학습 분할 결함만)
+RULES_COLLECTION = "rules"  # 사내 규칙 40건
+RAG_MANIFEST_PATH = CHROMA_DIR / "manifest.json"  # 색인 시점의 입력 해시·건수
+RULE_KEYWORD_BONUS = 0.3  # 규칙의 코드 패턴이 입력 코드에 있으면 유사도에 더하는 값
+SEARCH_MAX_TOP_K = 10
+MAX_CODE_CHARS = 8000  # search_rules 입력 코드 길이 상한
+HISTORY_TEXT_CHARS = 400  # 검색 결과의 티켓 문장 길이 상한
+
 # LLM (에이전트 단계에서 사용)
 MODEL = "gpt-5"  # 분석·수정·공격 에이전트
 MODEL_BULK = "gpt-6-luna"  # F2-3 티켓 문장 대량 생성 전용

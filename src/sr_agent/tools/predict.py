@@ -16,7 +16,7 @@ from xgboost import XGBRanker
 
 from sr_agent import config
 from sr_agent.ml.corpus import Candidate, load_candidates
-from sr_agent.ml.features import FEATURES, Embedder, build_features
+from sr_agent.ml.features import FEATURES, Embedder, build_features, get_embedder
 
 FEATURE_LABELS = {
     "tfidf_sim": "티켓-코드 단어 겹침 (TF-IDF)",
@@ -53,7 +53,7 @@ class FaultLocator:
         self.vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=config.TFIDF_NGRAM_RANGE,
                                           sublinear_tf=True)
         self.cand_tfidf = self.vectorizer.fit_transform(docs)
-        self.embedder = embedder or Embedder(meta["embedding_model"])
+        self.embedder = embedder or get_embedder(meta["embedding_model"])
         self.cand_emb = self.embedder.encode(docs)
         self.explainer = shap.TreeExplainer(self.ranker)
         self._cols = [FEATURES.index(f) for f in self.features]
