@@ -92,6 +92,9 @@ FAULT_MODEL_PATH = MODELS_DIR / "fault_ranker.json"
 FAULT_MODEL_META_PATH = MODELS_DIR / "fault_ranker_meta.json"
 FAULT_RESULTS_NAME = "fault_localization"  # eval/results/<이름>.{md,csv,json}
 KPI_TOP3 = 0.80
+PREDICT_MAX_TOP_K = 10
+PREDICT_REASONS = 3  # SHAP 근거 개수 (F3-2)
+MAX_TICKET_CHARS = 4000  # 입력 가드: 티켓 본문 길이 상한 (PRD 7.5)
 
 # LLM (에이전트 단계에서 사용)
 MODEL = "gpt-5"  # 분석·수정·공격 에이전트

@@ -49,8 +49,8 @@ class Embedder:
             self._model.max_seq_length = config.EMBED_MAX_SEQ_LEN
         return self._model
 
-    def encode(self, texts: list[str]) -> np.ndarray:
-        """L2 정규화된 임베딩 [len(texts), dim]."""
+    def encode(self, texts: list[str], save: bool = True) -> np.ndarray:
+        """L2 정규화된 임베딩 [len(texts), dim]. save=False면 새로 계산한 벡터를 캐시 파일에 쓰지 않는다."""
         keys = [hashlib.sha1(f"{self.model_name}\n{t}".encode()).hexdigest() for t in texts]
         cache = self._load_cache()
         missing = sorted({k: t for k, t in zip(keys, texts, strict=True) if k not in cache}.items())
@@ -60,8 +60,9 @@ class Embedder:
                 show_progress_bar=False,
             )
             cache.update({k: v for (k, _), v in zip(missing, vectors, strict=True)})
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            np.savez(self.cache_path, keys=np.array(list(cache)), vectors=np.stack(list(cache.values())))
+            if save:
+                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez(self.cache_path, keys=np.array(list(cache)), vectors=np.stack(list(cache.values())))
         return np.stack([cache[k] for k in keys])
 
 
@@ -88,7 +89,7 @@ def set_past_defects(X: np.ndarray, tickets: list[dict], candidates: list[Candid
     X[:, :, col] = np.array([counts.get(c.method, 0) for c in candidates], dtype=np.float32)
     index = {c.method: j for j, c in enumerate(candidates)}
     for i, t in enumerate(tickets):
-        if t["mutant_id"] in counted:
+        if t.get("mutant_id") in counted:
             X[i, index[t["fixed_method"]], col] -= 1
 
 
@@ -112,11 +113,12 @@ def build_features(
     X[:, :, FEATURES.index("loc")] = [c.loc for c in candidates]
     X[:, :, FEATURES.index("complexity")] = [c.complexity for c in candidates]
     if counted is None:
-        counted = {t["mutant_id"] for t in tickets if t["split"] == "train"}
+        counted = {t["mutant_id"] for t in tickets if t.get("split") == "train"}
     set_past_defects(X, tickets, candidates, counts, counted)
-    methods = [c.method for c in candidates]
+    index = {c.method: j for j, c in enumerate(candidates)}
     for i, t in enumerate(tickets):
-        y[i, methods.index(t["fixed_method"])] = 1
+        if t.get("fixed_method") in index:  # 예측할 때는 정답이 없다
+            y[i, index[t["fixed_method"]]] = 1
         frames = trace_frames(t.get("stacktrace", ""))
         if frames:
             in_trace = {f"{m}.{f}" for m, f in frames}
