@@ -1,0 +1,355 @@
+{
+  "ticket": {
+    "ticket_id": "SR-2103",
+    "type": "security",
+    "title": "시큐어코딩 진단: SQL 문자열 결합",
+    "body": "시큐어코딩 진단 결과, customer_dao.find_by_name에서 f-string으로 SQL을 조립하고 있습니다. 조치 바랍니다.",
+    "scenario": "S3",
+    "method": "customer_dao.find_by_name",
+    "judge": {
+      "method": "customer_dao.find_by_name",
+      "strategy": {
+        "args": [
+          {
+            "type": "just",
+            "value": {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "one_of",
+            "options": [
+              {
+                "type": "sampled",
+                "values": [
+                  "김민수",
+                  "이서연",
+                  "박지훈",
+                  "최없음",
+                  "",
+                  " 김민수",
+                  "김민수 "
+                ]
+              },
+              {
+                "type": "text",
+                "alphabet": "가나다김이박민수서연지훈abcXYZ0123 ",
+                "max_size": 8
+              }
+            ]
+          }
+        ]
+      },
+      "reference": null,
+      "attack_inputs": [
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "' OR '1'='1"
+          ],
+          "expected": [],
+          "note": "항상 참 조건으로 전체 조회"
+        },
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "김민수' --"
+          ],
+          "expected": [],
+          "note": "주석으로 뒤 조건 무시"
+        },
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "x' UNION SELECT id, name, email, phone, grade, created_at FROM customers --"
+          ],
+          "expected": [],
+          "note": "UNION으로 다른 행 조회"
+        },
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "O'Brien"
+          ],
+          "expected": [],
+          "note": "따옴표가 든 정상 이름 (오류 없이 빈 결과)"
+        }
+      ]
+    }
+  },
+  "status": "approval_pending",
+  "analysis": null,
+  "prediction": [],
+  "repro_verified": false,
+  "analysis_tries": 0,
+  "attempts": [
+    {
+      "number": 1,
+      "fix": {
+        "method": "customer_dao.find_by_name",
+        "patch_summary": "- 사용자 입력(name)을 f-string으로 SQL에 삽입하던 코드를 ? 자리표시자와 파라미터 튜플로 변경해 SQL 인젝션 가능성을 제거했습니다(SEC-SQL-01).\n- SQL 전문을 debug 로그로 남기던 코드를 제거하여 검색 조건(개인정보) 노출을 방지했습니다(SEC-LOG-03).\n- 조회 쿼리와 정렬 조건(ORDER BY id)은 그대로 유지하여 정상 입력의 결과(행과 순서)가 기존과 동일합니다.",
+        "rule_ids": [
+          "SEC-SQL-01",
+          "SEC-LOG-03"
+        ],
+        "history_ids": []
+      },
+      "diff": "--- a/src/order_settlement/customer_dao.py\n+++ b/src/order_settlement/customer_dao.py\n@@ -30,7 +30,6 @@\n     # type: (object, str) -> List[Dict]\n     \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n-    sql = f\"SELECT * FROM customers WHERE name = '{name}' ORDER BY id\"\n-    logger.debug(\"find_by_name: %s\", sql)\n-    return db.query_all(conn, sql)\n+    sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"\n+    return db.query_all(conn, sql, (name,))\n \n \n",
+      "attack": {
+        "summary": "SEC-SQL-01, SEC-LOG-03 모두 수정 자체는 적절해 보입니다. 다만 name=None 입력 시 원본은 'None' 문자열 검색, 수정본은 NULL 비교로 변경되어 결과가 달라지는 회귀를 확인했습니다. 인젝션 관련 입력에서의 변화는 의도된 수정으로 간주했습니다.",
+        "attempts": [
+          "과거 공격 기록 검색: security, customer_dao.find_by_name에 대한 선행 사례 없음",
+          "수정본 함수 소스 읽기 및 호출자 조회: 파라미터 바인딩으로 변경, 로그 제거 확인. 호출자는 없음",
+          "db.query_all 시그니처 확인: (conn, sql, params=())로 파라미터 바인딩 지원 확인",
+          "정상 입력(김민수)로 run_diff: 원본과 수정본 결과 동일 확인",
+          "인젝션 입력(\"' OR 1=1 --\")로 run_diff: 원본은 전체 행 반환, 수정본은 빈 결과(의도된 보안 수정)",
+          "특수문자 포함 이름(\"O'Neil\")로 run_diff: 원본은 SQL 오류, 수정본은 정상 반환(의도된 보안 수정)",
+          "None 입력으로 run_diff: 원본은 이름 'None' 매칭 1건 반환, 수정본은 빈 결과로 변경(회귀 발견)",
+          "정수 입력(123)로 run_diff: 양쪽 동일 결과",
+          "property_attack로 광범위 텍스트/None 혼합 탐색: 최소 반례로 None 입력에서 차이 확인(회귀 영역 재확인)"
+        ],
+        "findings": [
+          {
+            "kind": "regression",
+            "method": "customer_dao.find_by_name",
+            "input_json": "[[{\"$db\": {\"customers\": [{\"id\": 1, \"name\": \"None\", \"email\": \"none@x.com\", \"phone\": \"010-5555-5555\", \"grade\": \"BASIC\"}, {\"id\": 2, \"name\": \"김민수\", \"email\": \"a@x.com\", \"phone\": \"010-1000-1000\", \"grade\": \"BASIC\"}]}}, null]]",
+            "expected_json": "[{\"id\": 1, \"name\": \"None\", \"email\": \"none@x.com\", \"phone\": \"010-5555-5555\", \"grade\": \"BASIC\", \"created_at\": null}]",
+            "rule_id": "",
+            "explanation": "name 인자에 None이 들어오면, 원본은 f-string으로 'None'이라는 문자열을 비교하여 해당 이름 행을 반환했으나, 수정본은 파라미터 바인딩으로 NULL을 비교하여 결과가 빈 리스트가 됩니다. 이는 SQL 인젝션 방지(SEC-SQL-01)와 무관한 영역의 동작 변화이므로 회귀입니다.",
+            "original": {
+              "ok": false,
+              "exception": "TypeError: find_by_name() missing 1 required positional argument: 'name'"
+            },
+            "patched": {
+              "ok": false,
+              "exception": "TypeError: find_by_name() missing 1 required positional argument: 'name'"
+            },
+            "verified": false,
+            "check": "원본과 같음 (회귀 아님)"
+          }
+        ],
+        "saved_to_memory": 0,
+        "error": null
+      },
+      "judge": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "security_zero",
+            "passed": true,
+            "detail": "0건",
+            "data": {
+              "findings": 0
+            }
+          },
+          {
+            "name": "attack_neutralized",
+            "passed": true,
+            "detail": "공격 입력 4개 중 무력화 4개",
+            "data": {
+              "inputs": 4,
+              "neutralized": 4,
+              "under_fix": 0
+            }
+          },
+          {
+            "name": "normal_preserved",
+            "passed": true,
+            "detail": "입력 200개 중 원본과 다름 0개",
+            "data": {
+              "examples": 200,
+              "mismatches": 0,
+              "regression": 0
+            }
+          },
+          {
+            "name": "existing_tests_pass",
+            "passed": true,
+            "detail": "통과 1145, 실패 0",
+            "data": {
+              "passed": 1145,
+              "failed": 0
+            }
+          },
+          {
+            "name": "change_scope",
+            "passed": true,
+            "detail": "대상 함수만 변경",
+            "data": {}
+          }
+        ]
+      },
+      "error": null
+    }
+  ],
+  "human_review_reason": null,
+  "decision": null,
+  "tokens_used": 109586,
+  "run_ids": [
+    "SR-2103-20261020-170053"
+  ],
+  "updated_at": "2026-10-20T17:19:03"
+}

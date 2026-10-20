@@ -1,0 +1,171 @@
+{
+  "ticket": {
+    "ticket_id": "SR-2077",
+    "type": "standardize",
+    "title": "정산 마감일 계산 코드 표준화",
+    "body": "Python 3.12 전환 대비 및 팀 코드 표준 점검입니다. 정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거하고, 팀 코딩 표준에 맞게 정리해 주세요.",
+    "scenario": "S2",
+    "method": "settlement.calc_due_date",
+    "judge": {
+      "method": "settlement.calc_due_date",
+      "strategy": {
+        "args": [
+          {
+            "type": "one_of",
+            "options": [
+              {
+                "type": "sampled",
+                "values": [
+                  {
+                    "$datetime": "2024-01-31T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-01-31T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-02-28T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-02-29T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-02-29T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-03-31T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-11-30T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-12-31T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-12-31T15:00:00"
+                  },
+                  {
+                    "$datetime": "2025-01-01T00:00:00"
+                  },
+                  {
+                    "$datetime": "2025-02-28T15:00:00"
+                  },
+                  {
+                    "$datetime": "2025-09-30T15:00:00"
+                  }
+                ]
+              },
+              {
+                "type": "datetime",
+                "min": "2024-01-01T00:00:00",
+                "max": "2025-12-31T23:59:59"
+              }
+            ]
+          }
+        ]
+      },
+      "reference": null,
+      "attack_inputs": []
+    }
+  },
+  "status": "approval_pending",
+  "analysis": null,
+  "prediction": [],
+  "repro_verified": false,
+  "analysis_tries": 0,
+  "attempts": [
+    {
+      "number": 1,
+      "fix": {
+        "method": "settlement.calc_due_date",
+        "patch_summary": "코드 표준화에 따라 지원 종료 예정/비권장 API를 제거하고 팀 스타일을 반영했습니다. 1) datetime.utcnow()를 datetime.now(timezone.utc)로 교체해 Deprecation을 해소했습니다 (DEP-DT-01). 2) pytz.timezone, pytz.utc.localize 사용을 표준 라이브러리 zoneinfo와 aware datetime 변환으로 대체했습니다: naive UTC는 tzinfo=timezone.utc로 표시하고 astimezone(ZoneInfo(...))로 한국 시간으로 변환합니다 (DEP-TZ-01, DEP-TZ-02). 3) 공개 함수에 타입 힌트를 추가했습니다: def calc_due_date(order_dt: datetime | None = None) -> date (STY-01). 4) 동작은 동일하게 유지했습니다. 입력이 None이면 현재 UTC 시각을 사용하고, tz-aware datetime이 들어오면 이전 pytz.localize와 동일하게 ValueError를 발생시켜 naive UTC만 허용합니다. 한국 시간으로 변환해 주문 월 말일 기준 5영업일째를 계산하는 기존 업무 규칙은 그대로입니다 (BIZ-SET-01, BIZ-TIM-01). 또한 더 이상 쓰지 않는 import pytz를 제거했습니다.",
+        "rule_ids": [
+          "DEP-DT-01",
+          "DEP-TZ-01",
+          "DEP-TZ-02",
+          "STY-01",
+          "BIZ-SET-01",
+          "BIZ-TIM-01"
+        ],
+        "history_ids": []
+      },
+      "diff": "--- a/src/order_settlement/settlement.py\n+++ b/src/order_settlement/settlement.py\n@@ -4,7 +4,8 @@\n from typing import Tuple\n \n-import pytz\n \n from order_settlement import config, coupon, customer_dao, date_utils, db, discount, order, payment\n+from datetime import timezone\n+from zoneinfo import ZoneInfo\n \n \n@@ -26,5 +27,5 @@\n \n \n-def calc_due_date(order_dt=None):\n+def calc_due_date(order_dt: datetime | None = None) -> date:\n     \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n \n@@ -32,7 +33,12 @@\n     \"\"\"\n     if order_dt is None:\n-        order_dt = datetime.utcnow()\n-    kst = pytz.timezone(config.TIMEZONE_NAME)\n-    local = pytz.utc.localize(order_dt).astimezone(kst)\n+        utc_dt = datetime.now(timezone.utc)\n+    else:\n+        # 기존 동작과 동일하게 naive UTC만 허용한다.\n+        if order_dt.tzinfo is not None:\n+            raise ValueError(\"Not naive datetime (tzinfo is already set)\")\n+        utc_dt = order_dt.replace(tzinfo=timezone.utc)\n+\n+    local = utc_dt.astimezone(ZoneInfo(config.TIMEZONE_NAME))\n     month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n     return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)\n",
+      "attack": {
+        "summary": "표준화 패치 후 행동 동등성 검증 결과, tz-aware 입력의 예외 처리와 월경계/윤년 등 경계 케이스 포함 모든 시험에서 원본과 수정본의 결과가 일치했다. 규칙 위반이나 회귀를 발견하지 못했다.",
+        "attempts": [
+          "공격 메모리 조회: settlement.calc_due_date 관련 과거 회귀 사례 2건 확인 (tz-aware 입력에서 예외가 사라졌다는 기술) → 이번 패치는 tz-aware 검사 추가로 해당 위험이 없을 가능성 판단",
+          "수정된 함수 소스 읽기 및 호출자 확인(get_callers=settlement.settle_order): tz-aware 입력 시 ValueError를 명시적으로 발생시키는 로직 존재 확인",
+          "run_diff: tz-aware UTC 입력(2024-03-31T10:00:00+00:00)에서 원본·수정본 모두 ValueError로 동일",
+          "run_diff: tz-aware 비UTC 입력(2024-10-27T00:30:00+01:00)에서 원본·수정본 모두 ValueError로 동일",
+          "run_diff: 월경계 직전(2024-01-31 14:59:59 UTC) → 동일한 지급일 반환",
+          "run_diff: 월경계 시각(2024-01-31 15:00:00 UTC) → 동일한 지급일 반환(한국시간 다음날로 월 변경 반영)",
+          "run_diff: 윤년 말월 경계 교차(2024-02-29 23:00:00 UTC→KST 3/1) → 동일한 지급일 반환",
+          "run_diff: 입력 None(현재 시각 사용) → 원본·수정본 동일 결과",
+          "property_attack: None/naive datetime(1987-2030 범위) + 표본 tz-aware datetime 혼합 200건 → 원본·수정본 불일치 0건"
+        ],
+        "findings": [],
+        "saved_to_memory": 0,
+        "error": null
+      },
+      "judge": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "behavior_preserved",
+            "passed": true,
+            "detail": "입력 200개 중 원본과 다름 0개",
+            "data": {
+              "examples": 200,
+              "mismatches": 0,
+              "regression": 0
+            }
+          },
+          {
+            "name": "attack_regressions_preserved",
+            "passed": null,
+            "detail": "공격이 제안한 회귀 입력 없음",
+            "data": {}
+          },
+          {
+            "name": "deprecated_zero",
+            "passed": true,
+            "detail": "0건",
+            "data": {
+              "findings": 0
+            }
+          },
+          {
+            "name": "style_zero",
+            "passed": true,
+            "detail": "0건",
+            "data": {
+              "findings": 0
+            }
+          },
+          {
+            "name": "existing_tests_pass",
+            "passed": true,
+            "detail": "통과 1145, 실패 0 (-W error::DeprecationWarning:settlement)",
+            "data": {
+              "passed": 1145,
+              "failed": 0
+            }
+          },
+          {
+            "name": "change_scope",
+            "passed": true,
+            "detail": "대상 함수만 변경",
+            "data": {}
+          }
+        ]
+      },
+      "error": null
+    }
+  ],
+  "human_review_reason": null,
+  "decision": null,
+  "tokens_used": 127882,
+  "run_ids": [
+    "SR-2077-20261020-171456"
+  ],
+  "updated_at": "2026-10-20T17:19:03"
+}

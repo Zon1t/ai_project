@@ -1,0 +1,373 @@
+{
+  "ticket": {
+    "ticket_id": "SR-2041",
+    "type": "defect",
+    "title": "쿠폰 중복 적용 시 정산 금액 음수",
+    "body": "10만 원 이상 주문에 쿠폰을 두 장 쓰면 정산 금액이 음수로 찍힙니다.",
+    "scenario": "S1",
+    "method": null,
+    "judge": {
+      "method": "discount.apply_coupons",
+      "strategy": {
+        "args": [
+          {
+            "type": "one_of",
+            "options": [
+              {
+                "type": "sampled",
+                "values": [
+                  0,
+                  9990,
+                  50000,
+                  89990,
+                  90000,
+                  99990,
+                  100000,
+                  100010,
+                  110000,
+                  150000,
+                  300000
+                ]
+              },
+              {
+                "type": "integer",
+                "min": 0,
+                "max": 500000
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "min_size": 0,
+            "max_size": 3,
+            "items": {
+              "type": "one_of",
+              "options": [
+                {
+                  "type": "dict",
+                  "fields": {
+                    "type": {
+                      "type": "just",
+                      "value": "FIXED"
+                    },
+                    "value": {
+                      "type": "one_of",
+                      "options": [
+                        {
+                          "type": "sampled",
+                          "values": [
+                            1000,
+                            10000,
+                            50000,
+                            60000,
+                            70000,
+                            100000,
+                            150000
+                          ]
+                        },
+                        {
+                          "type": "integer",
+                          "min": 0,
+                          "max": 200000
+                        }
+                      ]
+                    },
+                    "min_order": {
+                      "type": "sampled",
+                      "values": [
+                        0,
+                        50000,
+                        90000,
+                        100000,
+                        110000
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "dict",
+                  "fields": {
+                    "type": {
+                      "type": "just",
+                      "value": "RATE"
+                    },
+                    "value": {
+                      "type": "integer",
+                      "min": 1,
+                      "max": 50
+                    },
+                    "min_order": {
+                      "type": "sampled",
+                      "values": [
+                        0,
+                        50000,
+                        90000,
+                        100000,
+                        110000
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "reference": {
+        "method": "discount.apply_coupon",
+        "code": "def apply_coupon(order_amount, coupon, current_amount=None):\n    if current_amount is None:\n        current_amount = order_amount\n    if not is_coupon_applicable(current_amount, coupon):  # BIZ-CPN-01\n        return current_amount\n    discount = calc_coupon_discount(current_amount, coupon)\n    return max(0, current_amount - discount)  # BIZ-CPN-02\n"
+      },
+      "attack_inputs": []
+    }
+  },
+  "status": "approval_pending",
+  "analysis": {
+    "final_method": "discount.apply_coupon",
+    "model_top3": [
+      "settlement.settle_order",
+      "discount.apply_coupon",
+      "discount.is_coupon_applicable"
+    ],
+    "model_rank": 2,
+    "reason": "정산 금액이 음수가 되는 직접 원인은 결제 금액을 계산하는 할인 단계에서 발생합니다. discount.apply_coupon은 두 가지 문제가 있습니다: (1) 쿠폰 적용 가능 여부를 원래 주문 금액(order_amount) 기준으로 판단하여(BIZ-CPN-01 위반) 앞선 쿠폰 적용으로 현재 금액이 최소 주문 금액 미만이 되어도 계속 적용됩니다. (2) 할인액이 현재 금액을 초과해도 0원으로 하한 처리하지 않아(BIZ-CPN-02 위반) 음수 금액을 그대로 반환합니다. 이 함수는 discount.apply_coupons → discount.calc_final_amount → settlement.calc_settlement_amount로 전파되어 최종 정산 금액도 음수가 됩니다. 재현 테스트에서 주문 100,000원에 FIXED 90,000 쿠폰과 FIXED 20,000 쿠폰(각 min_order=100,000)을 순서대로 적용하면 현재 코드에서는 -10,000원이 되어 실패합니다. 규칙대로라면 두 번째 쿠폰은 적용되지 않아 최종 10,000원이 되어야 하며(또는 잘못 적용되더라도 0원 하한), 이는 BIZ-CPN-01·BIZ-CPN-02를 모두 만족합니다.",
+    "disagreement": "모델 1위는 settlement.settle_order였으나, 이 함수는 정산 파이프라인을 조립만 하고 실제 금액 계산은 discount.calc_final_amount→discount.apply_coupons→discount.apply_coupon에서 수행됩니다. 음수 금액을 만드는 잘못된 연산(적용 가능 판단 기준 오류, 하한 0 미적용)은 discount.apply_coupon 내부에서 확인되었고, 재현 테스트로도 해당 함수의 오류가 직접 드러납니다.",
+    "evidence": [
+      {
+        "kind": "model",
+        "ref": "settlement.settle_order",
+        "note": "predict_fault_location Top-1"
+      },
+      {
+        "kind": "model",
+        "ref": "discount.apply_coupon",
+        "note": "predict_fault_location Top-2"
+      },
+      {
+        "kind": "model",
+        "ref": "discount.is_coupon_applicable",
+        "note": "predict_fault_location Top-3"
+      },
+      {
+        "kind": "code",
+        "ref": "discount.apply_coupon",
+        "note": "is_coupon_applicable(order_amount, coupon)로 최소 주문 금액 판단 기준이 잘못됨 (BIZ-CPN-01 위반)"
+      },
+      {
+        "kind": "code",
+        "ref": "discount.apply_coupon",
+        "note": "return current_amount - discount: 하한 0 처리 없음 (BIZ-CPN-02 위반)"
+      },
+      {
+        "kind": "code",
+        "ref": "discount.apply_coupons",
+        "note": "for coupon in coupons: current = apply_coupon(order_amount, coupon, current) — apply_coupon을 통해 연쇄 적용"
+      },
+      {
+        "kind": "code",
+        "ref": "discount.calc_final_amount",
+        "note": "등급 할인 후 apply_coupons 호출"
+      },
+      {
+        "kind": "code",
+        "ref": "settlement.calc_settlement_amount",
+        "note": "paid - fee - commission; paid가 음수면 정산 금액도 음수 전파"
+      },
+      {
+        "kind": "caller",
+        "ref": "discount.apply_coupon",
+        "note": "get_callers: ['discount.apply_coupons']"
+      },
+      {
+        "kind": "caller",
+        "ref": "discount.apply_coupons",
+        "note": "get_callers: ['discount.calc_final_amount']"
+      },
+      {
+        "kind": "coverage",
+        "ref": "discount.apply_coupon",
+        "note": "tests/test_discount.py::test_apply_coupons_two_on_large_order 등 총 9개 테스트가 라인 실행(lines_hit 보고)"
+      },
+      {
+        "kind": "rule",
+        "ref": "BIZ-CPN-01",
+        "note": "복수 쿠폰 최소 주문 금액은 직전 쿠폰까지 적용된 현재 금액 기준"
+      },
+      {
+        "kind": "rule",
+        "ref": "BIZ-CPN-02",
+        "note": "쿠폰 적용 후 결제 금액은 0원 아래로 내려가지 않음(하한 0원)"
+      },
+      {
+        "kind": "test",
+        "ref": "repro_tests/test_coupon_negative_settlement.py::test_coupons_do_not_make_payment_negative_and_check_min_order_on_current_amount",
+        "note": "original 실행 실패: result = -10000으로 음수 발생(AssertionError)"
+      }
+    ],
+    "history_ids": [
+      "HIS-dc2217ee",
+      "HIS-f45ea821",
+      "HIS-217535f8"
+    ],
+    "repro_test_path": "repro_tests/test_coupon_negative_settlement.py"
+  },
+  "prediction": [
+    {
+      "method": "discount.is_coupon_applicable",
+      "score": 0.1957,
+      "reasons": [
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.6286,
+          "contribution": 0.2798
+        },
+        {
+          "feature": "complexity",
+          "label": "함수 분기 복잡도",
+          "value": 1.0,
+          "contribution": 0.1375
+        },
+        {
+          "feature": "loc",
+          "label": "함수 길이 (줄)",
+          "value": 2.0,
+          "contribution": 0.1108
+        }
+      ]
+    },
+    {
+      "method": "discount.apply_coupon",
+      "score": -0.0998,
+      "reasons": [
+        {
+          "feature": "tfidf_sim",
+          "label": "티켓-코드 단어 겹침 (TF-IDF)",
+          "value": 0.1458,
+          "contribution": 0.8512
+        },
+        {
+          "feature": "trace_last",
+          "label": "스택트레이스의 예외 발생 위치",
+          "value": 0.0,
+          "contribution": 0.0075
+        },
+        {
+          "feature": "trace_module",
+          "label": "스택트레이스에 같은 모듈이 나옴",
+          "value": 0.0,
+          "contribution": 0.0075
+        }
+      ]
+    },
+    {
+      "method": "settlement.settle_order",
+      "score": -0.311,
+      "reasons": [
+        {
+          "feature": "loc",
+          "label": "함수 길이 (줄)",
+          "value": 20.0,
+          "contribution": 0.5695
+        },
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.6249,
+          "contribution": 0.2697
+        },
+        {
+          "feature": "trace_last",
+          "label": "스택트레이스의 예외 발생 위치",
+          "value": 0.0,
+          "contribution": 0.003
+        }
+      ]
+    }
+  ],
+  "repro_verified": true,
+  "analysis_tries": 1,
+  "attempts": [
+    {
+      "number": 1,
+      "fix": {
+        "method": "discount.apply_coupon",
+        "patch_summary": "쿠폰 적용 가능 여부 판단을 원주문 금액이 아닌 현재 금액(current_amount) 기준으로 변경하여 앞선 쿠폰 적용 후 최소 주문 금액 미달 시 추가 쿠폰을 건너뛰도록 수정(BIZ-CPN-01). 또한 할인액이 현재 금액을 초과해 결제 금액이 음수가 되는 경우를 막기 위해 반환값을 max(0, current_amount - discount)로 하한 0원 처리(BIZ-CPN-02). 이로써 10만 원 주문에 9만+2만 정액 쿠폰을 순차 적용 시 두 번째 쿠폰이 부적용되어 최종 1만 원이 되며, 설령 적용 경로가 있어도 음수 금액이 되지 않음.",
+        "rule_ids": [
+          "BIZ-CPN-02",
+          "BIZ-CPN-01"
+        ],
+        "history_ids": [
+          "HIS-dc2217ee",
+          "HIS-f45ea821",
+          "HIS-217535f8"
+        ]
+      },
+      "diff": "--- a/src/order_settlement/discount.py\n+++ b/src/order_settlement/discount.py\n@@ -58,8 +58,8 @@\n     if current_amount is None:\n         current_amount = order_amount\n-    if not is_coupon_applicable(order_amount, coupon):\n+    if not is_coupon_applicable(current_amount, coupon):\n         return current_amount\n     discount = calc_coupon_discount(current_amount, coupon)\n-    return current_amount - discount\n+    return max(0, current_amount - discount)\n \n \n",
+      "attack": {
+        "summary": "수정된 apply_coupon은 현재 금액 기준 적용 여부 판단(BIZ-CPN-01)과 0원 하한 처리(BIZ-CPN-02)를 모두 충족하며, 결함 영역 밖의 단일 쿠폰 시나리오에서도 원본과 동작이 동일했다. 확인된 수정 미달이나 회귀는 없다.",
+        "attempts": [
+          "과거 공격 기록 조회: discount.apply_coupon 관련 저장된 공격 없음",
+          "함수 소스 읽기: discount.apply_coupon, 호출자 discount.apply_coupons 및 보조 함수 is_coupon_applicable, calc_coupon_discount, calc_rate_discount 확인",
+          "미달 검증(BIZ-CPN-01): 주문 100,000원에서 앞선 쿠폰 후 현재금액 10,000원, 다음 쿠폰 FIXED 20,000원(min_order=100,000) 적용 시 run_diff 실행 → 패치가 쿠폰을 건너뛰어 10,000원 반환",
+          "미달 검증(BIZ-CPN-02): 현재금액 5,000원, 쿠폰 FIXED 20,000원(min_order=0) 적용 시 run_diff 실행 → 패치가 0원 하한 처리",
+          "경계 검증(BIZ-CPN-02): 현재금액 0원, 쿠폰 FIXED 1,000원(min_order=0) 적용 시 run_diff 실행 → 패치가 0원 하한 처리",
+          "회귀 검증(property_attack): 단일 쿠폰 영역(현재금액=None), RATE 0~100%·FIXED 0~50,000원, 주문 60,000~200,000원, min_order 0~60,000 범위에서 비교 → 차이 없음(0/200)"
+        ],
+        "findings": [],
+        "saved_to_memory": 0,
+        "error": null
+      },
+      "judge": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "repro_original_fails",
+            "passed": true,
+            "detail": "통과 0, 실패 1: ['repro_tests/test_coupon_negative_settlement.py::test_coupons_do_not_make_payment_negative_and_check_min_order_on_current_amount']",
+            "data": {}
+          },
+          {
+            "name": "repro_patched_passes",
+            "passed": true,
+            "detail": "통과 1, 실패 0",
+            "data": {}
+          },
+          {
+            "name": "existing_tests_pass",
+            "passed": true,
+            "detail": "통과 1145, 실패 0",
+            "data": {
+              "passed": 1145,
+              "failed": 0
+            }
+          },
+          {
+            "name": "change_scope",
+            "passed": true,
+            "detail": "대상 함수만 변경",
+            "data": {}
+          },
+          {
+            "name": "reference_property",
+            "passed": true,
+            "detail": "입력 200개 중 정답과 다름 0개 (미달 0, 회귀 0)",
+            "data": {
+              "examples": 200,
+              "mismatches": 0,
+              "under_fix": 0,
+              "regression": 0
+            }
+          }
+        ]
+      },
+      "error": null
+    }
+  ],
+  "human_review_reason": null,
+  "decision": null,
+  "tokens_used": 236160,
+  "run_ids": [
+    "SR-2041-20261020-170837"
+  ],
+  "updated_at": "2026-10-20T17:19:03"
+}
