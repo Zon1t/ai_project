@@ -236,5 +236,6 @@ $RECYCLE.BIN/
 .env
 runs/
 data/chroma/
+data/cache/
 .ruff_cache/
 .streamlit/secrets.toml
