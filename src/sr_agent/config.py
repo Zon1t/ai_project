@@ -46,7 +46,7 @@ SUBPROCESS_TIMEOUT_S = 10
 COVERAGE_TIMEOUT_S = 60  # get_coverage: 전체 테스트를 테스트별 기록으로 측정 (약 7초)
 MAX_COVERAGE_TESTS = 20
 JUDGE_TEST_TIMEOUT_S = 60  # 판정 노드의 전체 테스트 실행 (약 3초, 여유 있게)
-MAX_ANALYSIS_TRIES = 2  # 재현 테스트가 원본에서 실패하지 않으면 분석 1회 재시도
+MAX_ANALYSIS_TRIES = 3  # 재현 테스트 검증(원본 실패, 정답 구현 통과)에 실패하면 분석 재시도
 
 # 공격 (F5-3, F4-3)
 PROPERTY_TIMEOUT_S = 60  # property_attack·판정의 Hypothesis 실행

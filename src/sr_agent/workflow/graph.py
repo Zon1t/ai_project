@@ -24,13 +24,19 @@ from sr_agent.tools.predict import predict_fault_location
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
 from sr_agent.workflow.attack import run_attack
 from sr_agent.workflow.judge import judge_ticket
+from sr_agent.workflow.reference import build_reference
 from sr_agent.workflow.state import FixAttempt, Ticket, TicketState
 
 FINAL = {"approval_pending", "human_review", "approved", "rejected"}
 
 
-def verify_repro(ws: Workspace, path: str) -> str | None:
-    """재현 테스트가 원본에서 실제로 (테스트 오류가 아니라 단언 실패로) 실패하는지. 문제가 있으면 설명."""
+def verify_repro(ws: Workspace, path: str, ticket: Ticket | None = None) -> str | None:
+    """재현 테스트가 원본에서 실제로 (테스트 오류가 아니라 단언 실패로) 실패하는지. 문제가 있으면 설명.
+
+    판정 명세에 정답 구현이 있으면, 재현 테스트가 정답 구현에서는 통과하는지도 확인한다.
+    재현 테스트는 수정 에이전트가 고칠 수 없는 "정답"이라, 기대값이 틀리면 올바른 패치도 통과하지 못한다.
+    (정답 코드는 에이전트에 보여 주지 않고, 기대값이 틀렸다는 사실만 알린다)
+    """
     if not path.startswith(config.REPRO_DIRNAME + "/"):
         return f"재현 테스트 경로는 {config.REPRO_DIRNAME}/ 아래여야 함: {path}"
     result = run_tests(ws, "original", [path], timeout=config.JUDGE_TEST_TIMEOUT_S)
@@ -40,6 +46,16 @@ def verify_repro(ws: Workspace, path: str) -> str | None:
         return f"재현 테스트가 원본에서 통과함 (결함을 드러내지 못함): {path}"
     if any("::" not in f["test"] for f in result["failed"]):
         return "재현 테스트를 불러오지 못함 (import·문법 오류): " + result["failed"][0]["trace"][-500:]
+    if ticket is not None and ticket.judge is not None and ticket.judge.reference is not None:
+        build_reference(ws, ticket.judge)
+        ref = run_tests(ws, "reference", [path], timeout=config.JUDGE_TEST_TIMEOUT_S)
+        if "error" in ref:
+            return f"재현 테스트 실행 오류 (업무 규칙대로 고친 코드): {ref['error']}"
+        if ref["failed"]:
+            names = ", ".join(f["test"].split("::")[-1] for f in ref["failed"])
+            return (f"재현 테스트의 기대값이 업무 규칙과 다름: 업무 규칙대로 올바르게 고친 코드에서도 실패한다 "
+                    f"({names}). search_rules로 찾은 규칙을 모두 적용해 기대값을 다시 계산하고, "
+                    "확신할 수 없는 단언은 넣지 않는다.")
     return None
 
 
@@ -62,7 +78,7 @@ def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress
         progress(f"분석 에이전트 실행 ({state.analysis_tries}/{config.MAX_ANALYSIS_TRIES})")
         result = run_agent(client, ANALYSIS, analysis_input(state.ticket, feedback), ctx)
         state.analysis = result.output
-        problem = verify_repro(ctx.ws, state.analysis.repro_test_path)
+        problem = verify_repro(ctx.ws, state.analysis.repro_test_path, state.ticket)
         if problem is None and isinstance(read_method(ctx.ws, state.analysis.final_method), dict):
             problem = f"final_method가 대상 프로젝트에 없음: {state.analysis.final_method}"
         ctx.log.write(step="analysis", kind="verify", ok=problem is None,
@@ -93,7 +109,7 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         progress("공격 에이전트 실행")
         attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx)
         progress(f"공격 발견 {len(attempt.attack.verified())}건 (확인됨) → 판정 (코드)")
-        attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro)
+        attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro, attempt.attack)
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
         state.attempts.append(attempt)

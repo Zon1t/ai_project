@@ -26,6 +26,7 @@ CHECK_LABELS = {
     "behavior_preserved": "원본과 출력 완전 동일 (Hypothesis)",
     "deprecated_zero": "지원 종료 API 0건", "style_zero": "팀 스타일 위반 0건", "security_zero": "보안 위반 0건",
     "attack_neutralized": "공격 입력 무력화", "normal_preserved": "정상 입력 원본과 동일 (Hypothesis)",
+    "attack_regressions_preserved": "공격이 찾은 회귀 입력에서 원본과 동일",
 }
 _TICKET_ID = re.compile(r"^SR-\d{4}$")
 

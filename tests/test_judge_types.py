@@ -92,8 +92,9 @@ def test_standardize_s2(tmp_path, name, failing):
     checks = _checks(result)
     assert result.passed is (not failing)
     assert {k for k, v in checks.items() if v is False} == failing, result.checks
-    assert set(checks) == {"behavior_preserved", "deprecated_zero", "style_zero", "existing_tests_pass",
-                           "change_scope"}
+    assert set(checks) == {"behavior_preserved", "attack_regressions_preserved", "deprecated_zero", "style_zero",
+                           "existing_tests_pass", "change_scope"}
+    assert checks["attack_regressions_preserved"] is None  # 공격 기록 없음
 
 
 @pytest.mark.parametrize(("name", "failing"), [
@@ -159,3 +160,28 @@ def test_orphaned_deprecated_import_counts(tmp_path):
     assert [f["rule_id"] for f in found] == ["DEP-TZ-01"] and "쓰지 않는 import" in found[0]["detail"]
     # 원본에서도 안 쓰던 import(typing Tuple은 # type: 주석에서만 씀)는 세지 않는다
     assert all("typing" not in f["detail"] for f in found)
+
+
+def test_standardize_attack_regression_inputs_are_judged(tmp_path):
+    """공격 에이전트가 찾은 회귀 입력(시간대가 붙은 시각)을 판정이 다시 실행해 원본과 비교한다."""
+    from sr_agent.workflow.state import AttackReport, VerifiedFinding
+
+    finding = VerifiedFinding(kind="regression", method="settlement.calc_due_date",
+                              input_json='[{"$datetime": "2024-03-31T10:00:00+00:00"}]',
+                              expected_json='{"$exception": "ValueError"}', rule_id="", explanation="", verified=True)
+    attack = AttackReport(findings=[finding])
+    ticket = load_ticket("SR-2077")
+    code, imports = S2_PATCHES["good"]  # 원본은 시간대가 붙은 입력을 거부(ValueError), 이 패치는 계산함
+    ws = prepare_workspace("SR-2077", runs_dir=tmp_path)
+    apply_patch(ws, ticket.method, code, imports)
+    result = judge_ticket(ws, ticket, ticket.method, [], attack)
+    assert _checks(result)["attack_regressions_preserved"] is False and not result.passed
+
+    keeps = code.replace("    if order_dt is None:\n",
+                         "    if order_dt is not None and order_dt.tzinfo is not None:\n"
+                         "        raise ValueError(\"Not naive datetime (tzinfo is already set)\")\n"
+                         "    if order_dt is None:\n")
+    ws2 = prepare_workspace("SR-2077b", runs_dir=tmp_path)
+    assert apply_patch(ws2, ticket.method, keeps, imports)["applied"]
+    result = judge_ticket(ws2, ticket, ticket.method, [], attack)
+    assert _checks(result)["attack_regressions_preserved"] is True and result.passed, result.checks

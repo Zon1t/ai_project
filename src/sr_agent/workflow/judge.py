@@ -15,6 +15,7 @@
 """
 
 import ast
+import json
 
 from sr_agent import config
 from sr_agent.tools.attack import compare_versions
@@ -23,7 +24,7 @@ from sr_agent.tools.code import _split_method, find_function, module_path
 from sr_agent.tools.execution import run_diff, run_tests
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree
 from sr_agent.workflow.reference import build_reference
-from sr_agent.workflow.state import JudgeCheck, JudgeResult, JudgeSpec, Ticket
+from sr_agent.workflow.state import AttackReport, JudgeCheck, JudgeResult, JudgeSpec, Ticket
 
 
 def _units(tree: ast.Module, skip: str) -> tuple[dict[str, str], list[str]]:
@@ -212,13 +213,40 @@ def judge_defect(ws: Workspace, method: str, repro_tests: list[str], spec: Judge
     return _result(checks)
 
 
-def judge_standardize(ws: Workspace, method: str, spec: JudgeSpec | None) -> JudgeResult:
-    """코드 표준화: 동작 완전 보존 + 지원 종료 API 0건 + 팀 스타일 0건 + 대상 모듈 경고를 오류로 테스트."""
+def attack_regressions_check(ws: Workspace, attack: AttackReport | None) -> JudgeCheck:
+    """공격 에이전트가 찾은 회귀 입력을 다시 실행해 수정본 = 원본인지 본다 (동작 완전 보존 유형).
+
+    LLM은 입력만 제안하고, 같은지 다른지는 코드가 판단한다 (Hypothesis가 입력을 만드는 것과 같은 역할).
+    """
+    regressions = [f for f in (attack.findings if attack else []) if f.kind == "regression"]
+    if not regressions:
+        return JudgeCheck(name="attack_regressions_preserved", passed=None, detail="공격이 제안한 회귀 입력 없음")
+    failed = []
+    for f in regressions:
+        try:
+            rows = run_diff(ws, f.method, [json.loads(f.input_json)])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rows, list) and not rows[0]["same"]:
+            failed.append((f, rows[0]))
+    detail = f"공격 회귀 입력 {len(regressions)}개 중 원본과 다름 {len(failed)}개"
+    if failed:
+        f, row = failed[0]
+        detail += f". 예: {f.method}({f.input_json}) → 수정본 {_short(row['patched'])}, 원본 {_short(row['original'])}"
+    return JudgeCheck(name="attack_regressions_preserved", passed=not failed, detail=detail,
+                      data={"inputs": len(regressions), "regression": len(failed)})
+
+
+def judge_standardize(ws: Workspace, method: str, spec: JudgeSpec | None,
+                      attack: AttackReport | None = None) -> JudgeResult:
+    """코드 표준화: 동작 완전 보존(Hypothesis + 공격 회귀 입력), 지원 종료 API 0건, 팀 스타일 0건,
+    대상 모듈 경고를 오류로 한 테스트, 변경 범위."""
     module = _split_method(method)[0]
     preserved = (preserved_check(ws, spec, "behavior_preserved") if spec
                  else JudgeCheck(name="behavior_preserved", passed=None, detail="판정 명세 없음"))
     return _result([
         preserved,
+        attack_regressions_check(ws, attack),
         findings_check(ws, method, "deprecated", "deprecated_zero"),
         findings_check(ws, method, "style", "style_zero"),
         existing_tests_check(ws, deprecation_module=module),
@@ -237,10 +265,11 @@ def judge_security(ws: Workspace, method: str, spec: JudgeSpec | None) -> JudgeR
     return _result(checks)
 
 
-def judge_ticket(ws: Workspace, ticket: Ticket, method: str, repro_tests: list[str]) -> JudgeResult:
+def judge_ticket(ws: Workspace, ticket: Ticket, method: str, repro_tests: list[str],
+                 attack: AttackReport | None = None) -> JudgeResult:
     """티켓 유형별 판정 (F5-4)."""
     if ticket.type == "defect":
         return judge_defect(ws, method, repro_tests, ticket.judge)
     if ticket.type == "standardize":
-        return judge_standardize(ws, method, ticket.judge)
+        return judge_standardize(ws, method, ticket.judge, attack)
     return judge_security(ws, method, ticket.judge)

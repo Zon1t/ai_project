@@ -17,7 +17,8 @@ from pathlib import Path
 from sr_agent import config
 
 _TICKET_ID = re.compile(config.TICKET_ID_PATTERN)
-_VERSION_DIRS = {"original": config.ORIGINAL_DIRNAME, "patched": config.WORK_DIRNAME}
+# reference: 판정용 정답 구현 버전 (workflow/reference.py가 만든다. LLM 도구에는 노출하지 않음)
+_VERSION_DIRS = {"original": config.ORIGINAL_DIRNAME, "patched": config.WORK_DIRNAME, "reference": "reference"}
 
 
 class WorkspaceError(ValueError):

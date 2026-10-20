@@ -31,6 +31,7 @@ TICKET = Ticket(ticket_id="SR-BUG", type="defect", title="결제 금액 음수",
                     reference=ReferenceImpl(method="calc.payable", code=(
                         "def payable(amount, discount):\n    return max(0, amount - discount)\n"))))
 REPRO = "from order_settlement import calc\n\n\ndef test_never_negative():\n    assert calc.payable(100, 300) == 0\n"
+WRONG = "from order_settlement import calc\n\n\ndef test_wrong():\n    assert calc.payable(100, 300) == 5\n"
 WEAK = "from order_settlement import calc\n\n\ndef test_ok():\n    assert calc.payable(500, 100) == 400\n"
 GOOD = "def payable(amount, discount):\n    return max(0, amount - discount)\n"
 BAD = "def payable(amount, discount):\n    return 0\n"
@@ -60,7 +61,7 @@ class FakeAgents:
             code = self.repro_codes.pop(0)
             if isinstance(code, Exception):
                 raise code
-            name = "never_negative" if code is REPRO else "weak"
+            name = {id(REPRO): "never_negative", id(WRONG): "wrong"}.get(id(code), "weak")
             path = write_repro_test(ctx.ws, name, code)["path"]
             ctx.budget.add({"total_tokens": 100})
             return AgentResult(output=analysis_output(path), model="fake", turns=3)
@@ -130,7 +131,7 @@ def test_repro_not_failing_on_original_retries_analysis(run):
 
 
 def test_repro_never_verified_goes_to_human_review(run):
-    state = run(FakeAgents(repro_codes=[WEAK, WEAK]))
+    state = run(FakeAgents(repro_codes=[WEAK] * config.MAX_ANALYSIS_TRIES))
     assert state.status == "human_review" and "분석 실패" in state.human_review_reason
     assert state.attempts == []
 
@@ -180,8 +181,8 @@ def test_standardize_skips_analysis_and_uses_type_judge(run):
     assert agents.inputs["analysis"] == [] and state.analysis is None
     assert json.loads(agents.inputs["fix"][0])["analysis"]["method"] == "calc.payable"
     checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
-    assert checks == {"behavior_preserved": True, "deprecated_zero": True, "style_zero": True,
-                      "existing_tests_pass": True, "change_scope": True}
+    assert checks == {"behavior_preserved": True, "attack_regressions_preserved": None, "deprecated_zero": True,
+                      "style_zero": True, "existing_tests_pass": True, "change_scope": True}
     assert state.status == "approval_pending"
 
 
@@ -224,3 +225,12 @@ def test_attack_refusal_goes_to_human_review(run, monkeypatch):
         return original(client, spec, user_input, ctx)
     state = run(refuse_attack)
     assert state.status == "human_review" and "LLMRefusal" in state.human_review_reason
+
+
+def test_repro_with_wrong_expectation_is_rejected_by_reference(run):
+    """원본에서 실패하더라도, 정답 구현에서도 실패하는 재현 테스트(기대값이 틀림)는 받아들이지 않는다."""
+    agents = FakeAgents(repro_codes=[WRONG, REPRO])
+    state = run(agents)
+    assert state.status == "approval_pending" and state.analysis_tries == 2
+    feedback = agents.inputs["analysis"][1]
+    assert "기대값이 업무 규칙과 다름" in feedback and "max(0" not in feedback  # 정답 코드는 알려 주지 않는다
