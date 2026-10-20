@@ -7,6 +7,7 @@
 - 응답 status가 incomplete면 LLMError, 거부(refusal)면 LLMRefusal → 해당 티켓은 사람 검토.
 - 서버 오류·연결 오류·모델 없음이면 (SDK 재시도 후) fallback 모델로 다시 요청한다. 기본은 꺼짐.
 - 호출마다 usage를 티켓 토큰 예산에 더하고, LLM 호출·도구 호출을 runs/<run_id>.jsonl에 남긴다.
+- 마지막 턴에는 도구를 막고 지금까지 확인한 내용으로 결과를 정리하게 한다 (탐색한 내용을 잃지 않게).
 """
 
 import time
@@ -23,6 +24,8 @@ from sr_agent.agents.tooling import REGISTRY, _summary, execute, to_output
 from sr_agent.llm import LLMError, LLMRefusal, _refusal, usage_dict
 
 _DROP_KEYS = {"parsed", "parsed_arguments"}  # parse()가 붙이는 필드. 다시 입력으로 보내면 API가 거부한다
+FINAL_TURN_NOTICE = ("도구 호출 횟수 상한에 도달했다. 더 이상 도구를 부를 수 없다. "
+                     "지금까지 확인한 내용으로 최종 결과를 정리하라.")
 
 
 class AgentStopped(RuntimeError):
@@ -85,7 +88,7 @@ def _call(client: OpenAI, spec: AgentSpec, model: str, items: list, tools: list[
         "prompt_cache_key": f"sr-agent-{spec.name}",
     }
     if tools:
-        kwargs.update(tools=tools, tool_choice="auto")
+        kwargs.update(tools=tools, tool_choice="none" if turn == spec.max_turns else "auto")
     started = time.monotonic()
     try:
         response = client.responses.parse(model=model, **kwargs)
@@ -119,6 +122,8 @@ def run_agent(client: OpenAI, spec: AgentSpec, user_input: str, ctx: RunContext)
     result = AgentResult(output=None, model=model, turns=0)  # type: ignore[arg-type]
     total: dict[str, int] = {}
     for turn in range(1, spec.max_turns + 1):
+        if turn == spec.max_turns and turn > 1:
+            items.append({"role": "user", "content": FINAL_TURN_NOTICE})
         response, model = _call(client, spec, model, items, tool_schemas, ctx, turn)
         for k, v in usage_dict(response.usage).items():
             total[k] = total.get(k, 0) + v

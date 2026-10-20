@@ -100,6 +100,7 @@ def execute(name: str, arguments: str, allowed: set[str], ws: Workspace | None) 
 # ---------------- 등록 (구현된 도구부터) ----------------
 
 def _register_builtin() -> None:
+    from sr_agent.tools.attack import attack_memory, property_attack, run_diff_json
     from sr_agent.tools.code import apply_patch, get_callers, read_method
     from sr_agent.tools.execution import run_tests
     from sr_agent.tools.predict import predict_fault_location
@@ -153,6 +154,33 @@ def _register_builtin() -> None:
         "search_rules", "코드와 관련된 사내 규칙(보안·지원 종료 API·팀 스타일·업무)을 찾는다. rule_id를 인용한다.",
         {"code": {"type": "string", "description": "검토할 코드"}, "top_k": top_k},
         search_rules, defaults=(("top_k", 5),),
+    ))
+    # 형태가 자유로운 JSON(입력·전략·기록)은 strict 스키마로 표현할 수 없어 JSON 문자열로 받는다
+    register(Tool(
+        "run_diff", "같은 입력으로 원본과 수정본 함수를 각각 실행해 결과를 비교한다.",
+        {"method": method,
+         "inputs_json": {"type": "string", "description": "입력 목록 JSON. 각 입력은 인자 리스트 또는 "
+                         '{"args": [...], "kwargs": {...}}. 날짜는 {"$date": "2024-01-31"}, '
+                         '시각은 {"$datetime": "2024-01-31T16:00:00"}'}},
+        run_diff_json, needs_ws=True,
+    ))
+    register(Tool(
+        "property_attack", "Hypothesis로 입력을 많이 만들어 원본과 수정본을 비교하고, 다른 입력은 최소 사례로 줄인다.",
+        {"method": method,
+         "strategy_json": {"type": "string",
+                           "description": '입력 생성 규칙 JSON: {"args": [spec...], "kwargs": {...}}'},
+         "max_examples": {"type": ["integer", "null"], "description": "생성할 입력 수 (null이면 200)"}},
+        lambda ws, method, strategy_json, max_examples: property_attack(ws, method, strategy_json, max_examples),
+        needs_ws=True, defaults=(("max_examples", 200),),
+    ))
+    register(Tool(
+        "attack_memory", "같은 유형 티켓에서 과거에 성공한 공격을 찾는다. 저장은 워크플로가 확인된 발견만 한다.",
+        {"op": {"type": "string", "enum": ["search"]},
+         "attack_type": {"type": "string", "enum": ["defect", "standardize", "security"],
+                         "description": "티켓 유형"},
+         "record_json": {"type": ["string", "null"],
+                         "description": '{"method": "모듈.함수"} (선택, 같은 함수 공격을 앞에 둔다)'}},
+        lambda op, attack_type, record_json: attack_memory(op, attack_type, record_json),
     ))
     register(Tool(
         "run_tests",

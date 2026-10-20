@@ -48,6 +48,11 @@ def report(state: TicketState) -> str:
             lines.append(f"오류: {att.error}")
         if att.diff:
             lines.append(att.diff.rstrip())
+        if att.attack:
+            label = {"under_fix": "미달", "regression": "회귀"}
+            lines.append(f"공격: {att.attack.summary or att.attack.error or '-'}")
+            lines += [f"  {'O' if f.verified else '?'} [{label[f.kind]}] {f.method}({f.input_json}) "
+                      f"기대 {f.expected_json} / 수정본 {f.patched} — {f.check}" for f in att.attack.findings]
         if att.judge:
             lines.append(f"판정: {'통과' if att.judge.passed else '실패'}")
             mark = {True: "O", False: "X", None: "-"}

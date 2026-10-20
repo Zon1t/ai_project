@@ -14,14 +14,30 @@ TicketType = Literal["defect", "standardize", "security"]
 Status = Literal["new", "analyzing", "fixing", "approval_pending", "human_review", "approved", "rejected"]
 
 
+class ReferenceImpl(BaseModel):
+    """사람이 미리 써 둔 정답 함수 (판정 기준. 에이전트는 보지 않는다)."""
+
+    method: str
+    code: str
+
+
+class JudgeSpec(BaseModel):
+    """판정용 속성 검사 명세: 진입 함수, 입력 생성 규칙, 정답 구현."""
+
+    method: str  # Hypothesis로 호출할 진입 함수 (예: discount.apply_coupons)
+    strategy: dict  # property_attack과 같은 strategy_spec
+    reference: ReferenceImpl
+
+
 class Ticket(BaseModel):
-    """처리할 SR 티켓."""
+    """처리할 SR 티켓. judge는 판정 노드만 쓴다 (에이전트 입력에 넣지 않음)."""
 
     ticket_id: str
     type: TicketType
     title: str
     body: str
     scenario: str | None = None
+    judge: JudgeSpec | None = None
 
     @property
     def text(self) -> str:
@@ -56,6 +72,45 @@ class FixOutput(BaseModel):
     history_ids: list[str]
 
 
+class AttackFinding(BaseModel):
+    """공격 에이전트가 찾은 문제 하나 (F5-3)."""
+
+    kind: Literal["under_fix", "regression"]  # 수정 미달 / 회귀
+    method: str  # run_diff로 호출한 함수
+    input_json: str  # run_diff 입력 하나 (인자 리스트 또는 {"args", "kwargs"})
+    expected_json: str  # 업무 규칙상 올바른 결과. 예외를 기대하면 {"$exception": "ValueError"}
+    rule_id: str  # 근거 규칙 ID (없으면 빈 문자열)
+    explanation: str
+
+
+class AttackOutput(BaseModel):
+    """공격 에이전트의 최종 결과."""
+
+    findings: list[AttackFinding]
+    attempts: list[str]  # 시도한 공격 요약
+    summary: str
+
+
+class VerifiedFinding(AttackFinding):
+    """코드로 다시 실행해 확인한 발견. verified는 코드로 확인된 사실만 뜻한다."""
+
+    original: dict | None = None
+    patched: dict | None = None
+    verified: bool = False
+    check: str = ""  # 무엇을 확인했는지
+
+
+class AttackReport(BaseModel):
+    summary: str = ""
+    attempts: list[str] = Field(default_factory=list)
+    findings: list[VerifiedFinding] = Field(default_factory=list)
+    saved_to_memory: int = 0
+    error: str | None = None
+
+    def verified(self) -> list[VerifiedFinding]:
+        return [f for f in self.findings if f.verified]
+
+
 class JudgeCheck(BaseModel):
     name: str
     passed: bool | None  # None = 아직 평가하지 않는 조건
@@ -74,6 +129,7 @@ class FixAttempt(BaseModel):
     number: int  # 1 = 첫 시도, 2~ = 재시도
     fix: FixOutput | None = None
     diff: str = ""
+    attack: AttackReport | None = None
     judge: JudgeResult | None = None
     error: str | None = None
 

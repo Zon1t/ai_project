@@ -1,10 +1,11 @@
 """고정 워크플로 그래프 (PRD 7.1, F5-1 ~ F5-5). 프레임워크 없이 직접 짠다.
 
-분석 → 재현 확인(코드) → 수정 → 판정(코드) ─통과→ 승인 대기
+분석 → 재현 확인(코드) → 수정 → 공격 → 판정(코드) ─통과→ 승인 대기
   재현 테스트가 원본에서 실패하지 않으면 분석을 한 번 더 (config.MAX_ANALYSIS_TRIES)
   판정 실패 시 실패 내용을 붙여 수정 재시도 (첫 시도 + config.MAX_PATCH_RETRIES회), 초과하면 사람 검토
 노드 사이에는 구조화 결과만 넘기고, 노드가 끝날 때마다 state.json에 저장한다 (중단 후 이어서 실행).
-지금은 결함 수정 유형만 판정한다. 공격 단계는 4일차에 수정과 판정 사이에 들어간다.
+공격 발견은 코드로 다시 확인해 기록하고 재시도 입력에 붙인다. 통과·실패는 판정 노드가 정한다.
+지금은 결함 수정 유형만 판정한다.
 """
 
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from sr_agent.llm import LLMError, LLMRefusal
 from sr_agent.tools.code import read_method
 from sr_agent.tools.execution import run_tests
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
+from sr_agent.workflow.attack import run_attack
 from sr_agent.workflow.judge import judge_defect
 from sr_agent.workflow.state import FixAttempt, Ticket, TicketState
 
@@ -83,8 +85,10 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         except AgentStopped as e:
             attempt.error = str(e)
         attempt.diff = _work_diff(ctx.ws)
-        progress("판정 (코드)")
-        attempt.judge = judge_defect(ctx.ws, analysis.final_method, [analysis.repro_test_path])
+        progress("공격 에이전트 실행")
+        attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx)
+        progress(f"공격 발견 {len(attempt.attack.verified())}건 (확인됨) → 판정 (코드)")
+        attempt.judge = judge_defect(ctx.ws, analysis.final_method, [analysis.repro_test_path], state.ticket.judge)
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
         state.attempts.append(attempt)

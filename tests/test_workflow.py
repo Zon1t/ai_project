@@ -9,10 +9,27 @@ from sr_agent.agents.loop import AgentResult
 from sr_agent.llm import LLMRefusal
 from sr_agent.tools.code import apply_patch
 from sr_agent.tools.testing import write_repro_test
+from sr_agent.workflow import attack as attack_mod
 from sr_agent.workflow import graph
-from sr_agent.workflow.state import AnalysisOutput, Evidence, FixOutput, Ticket, TicketState
+from sr_agent.workflow.state import (
+    AnalysisOutput,
+    AttackFinding,
+    AttackOutput,
+    Evidence,
+    FixOutput,
+    JudgeSpec,
+    ReferenceImpl,
+    Ticket,
+    TicketState,
+)
 
-TICKET = Ticket(ticket_id="SR-BUG", type="defect", title="결제 금액 음수", body="할인이 크면 결제 금액이 음수입니다.")
+TICKET = Ticket(ticket_id="SR-BUG", type="defect", title="결제 금액 음수", body="할인이 크면 결제 금액이 음수입니다.",
+                judge=JudgeSpec(
+                    method="calc.payable",
+                    strategy={"args": [{"type": "integer", "min": 0, "max": 1000},
+                                       {"type": "integer", "min": 0, "max": 1000}]},
+                    reference=ReferenceImpl(method="calc.payable", code=(
+                        "def payable(amount, discount):\n    return max(0, amount - discount)\n"))))
 REPRO = "from order_settlement import calc\n\n\ndef test_never_negative():\n    assert calc.payable(100, 300) == 0\n"
 WEAK = "from order_settlement import calc\n\n\ndef test_ok():\n    assert calc.payable(500, 100) == 400\n"
 GOOD = "def payable(amount, discount):\n    return max(0, amount - discount)\n"
@@ -29,10 +46,11 @@ def analysis_output(path="repro_tests/test_never_negative.py"):
 class FakeAgents:
     """spec.name별로 미리 정한 행동을 한다. 실제 도구로 작업본을 바꾼다."""
 
-    def __init__(self, repro_codes=(REPRO,), patches=(GOOD,)):
+    def __init__(self, repro_codes=(REPRO,), patches=(GOOD,), findings=()):
         self.repro_codes = list(repro_codes)
         self.patches = list(patches)
-        self.inputs = {"analysis": [], "fix": []}
+        self.findings = list(findings)  # 공격 에이전트가 보고할 발견 (시도마다 같은 목록)
+        self.inputs = {"analysis": [], "fix": [], "attack": []}
 
     def __call__(self, client, spec, user_input, ctx):
         self.inputs[spec.name].append(user_input)
@@ -44,6 +62,9 @@ class FakeAgents:
             path = write_repro_test(ctx.ws, name, code)["path"]
             ctx.budget.add({"total_tokens": 100})
             return AgentResult(output=analysis_output(path), model="fake", turns=3)
+        if spec.name == "attack":
+            return AgentResult(output=AttackOutput(findings=self.findings, attempts=["경계값"], summary="공격 완료"),
+                               model="fake", turns=2)
         patch = self.patches.pop(0)
         if isinstance(patch, Exception):
             raise patch
@@ -53,10 +74,17 @@ class FakeAgents:
                                             rule_ids=["BIZ-CPN-02"], history_ids=["HIS-1"]), model="fake", turns=2)
 
 
+@pytest.fixture(autouse=True)
+def isolated_memory(tmp_path, monkeypatch):
+    """공격 메모리를 실제 data/chroma가 아니라 임시 폴더에 쓴다."""
+    monkeypatch.setattr(config, "CHROMA_DIR", tmp_path / "chroma")
+
+
 @pytest.fixture
 def run(bug_target, tmp_path, monkeypatch):
     def _run(agents, **kw):
         monkeypatch.setattr(graph, "run_agent", agents)
+        monkeypatch.setattr(attack_mod, "run_agent", agents)
         return graph.run_ticket(TICKET, client=None, source=bug_target, runs_dir=tmp_path / "runs", **kw)
     return _run
 
@@ -72,10 +100,12 @@ def test_happy_path(run, tmp_path):
     assert saved.status == "approval_pending" and saved.analysis.final_method == "calc.payable"
     log = [json.loads(line) for line in (tmp_path / "runs" / f"{state.run_ids[0]}.jsonl").read_text(
         encoding="utf-8").splitlines()]
-    assert [r["kind"] for r in log] == ["verify", "judge", "end"]
+    assert [r["kind"] for r in log] == ["verify", "verify", "judge", "end"]  # 재현 확인, 공격 확인, 판정
+    checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
+    assert checks["reference_property"] is True
     # 다시 실행하면 끝난 티켓은 그대로 돌려준다 (에이전트 호출 없음)
     again = FakeAgents(repro_codes=[], patches=[])
-    assert run(again).status == "approval_pending" and again.inputs == {"analysis": [], "fix": []}
+    assert run(again).status == "approval_pending" and again.inputs == {"analysis": [], "fix": [], "attack": []}
 
 
 def test_fix_input_has_only_structured_results(run):
@@ -132,3 +162,43 @@ def test_resume_skips_finished_analysis(run, tmp_path):
 def test_non_defect_type_not_supported_yet(run):
     with pytest.raises(NotImplementedError):
         graph.run_ticket(TICKET.model_copy(update={"type": "security"}), client=None)
+
+
+UNDER = AttackFinding(kind="under_fix", method="calc.payable", input_json="[100, 300]", expected_json="0",
+                      rule_id="BIZ-CPN-02", explanation="할인이 크면 0원이어야 함")
+FAKE = AttackFinding(kind="regression", method="calc.payable", input_json="[500, 100]", expected_json="400",
+                     rule_id="", explanation="원본과 같아야 함")
+
+
+def test_attack_findings_verified_saved_and_fed_to_retry(run):
+    agents = FakeAgents(patches=[BAD, GOOD], findings=[UNDER, FAKE])
+    state = run(agents)
+    first = state.attempts[0]
+    assert [(f.kind, f.verified) for f in first.attack.findings] == [("under_fix", False), ("regression", True)]
+    # BAD(항상 0) 패치: [100,300]은 기대값 0과 같아 미달 아님, [500,100]은 원본 400과 달라 회귀 확인
+    assert first.attack.findings[1].patched == {"ok": True, "value": 0}
+    assert first.attack.saved_to_memory == 1
+    assert {c.name for c in first.judge.failures()} >= {"reference_property"}
+    retry = json.loads(agents.inputs["fix"][1])["previous_attempts"][0]
+    assert retry["attack_findings"][0]["kind"] == "regression"
+    assert state.status == "approval_pending"
+
+
+def test_attack_input_has_no_reference(run):
+    agents = FakeAgents()
+    run(agents)
+    payload = json.loads(agents.inputs["attack"][0])
+    assert "judge" not in payload and "reference" not in json.dumps(payload)
+    assert payload["fix"]["method"] == "calc.payable" and "diff" in payload
+
+
+def test_attack_refusal_goes_to_human_review(run, monkeypatch):
+    agents = FakeAgents()
+    original = agents.__call__
+
+    def refuse_attack(client, spec, user_input, ctx):
+        if spec.name == "attack":
+            raise LLMRefusal("거부")
+        return original(client, spec, user_input, ctx)
+    state = run(refuse_attack)
+    assert state.status == "human_review" and "LLMRefusal" in state.human_review_reason

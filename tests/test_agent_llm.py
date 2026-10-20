@@ -59,3 +59,35 @@ def test_fallback_when_primary_model_missing(client, ctx):
     assert result.model == config.MODEL and result.output.variable == "order_amount"
     log = [json.loads(line) for line in ctx.log.path.read_text(encoding="utf-8").splitlines()]
     assert log[0]["kind"] == "fallback" and log[0]["model"] == "gpt-5-does-not-exist"
+
+
+# ---------------- 공격 에이전트: 일부러 불완전하게 만든 S1 패치 ----------------
+
+def test_attack_agent_catches_incomplete_s1_patch(client, tmp_path, monkeypatch):
+    from sr_agent.run import load_ticket
+    from sr_agent.tools.code import apply_patch
+    from sr_agent.workflow.attack import run_attack
+    from sr_agent.workflow.graph import _work_diff
+    from sr_agent.workflow.state import AnalysisOutput, Evidence, FixAttempt, FixOutput
+    from tests.test_attack import S1_PATCHES
+
+    monkeypatch.setattr(config, "CHROMA_DIR", tmp_path / "chroma")  # 공격 메모리 격리
+    results = {}
+    for patch, cited in (("A_floor_only", ["BIZ-CPN-02"]), ("B_basis_only", ["BIZ-CPN-01"])):
+        ws = prepare_workspace(f"SR-ATK-{patch[0]}", runs_dir=tmp_path / "ws")
+        assert apply_patch(ws, "discount.apply_coupon", S1_PATCHES[patch])["applied"]
+        ctx = RunContext.new(ws.ticket_id, ws=ws, runs_dir=tmp_path / "runs")
+        analysis = AnalysisOutput(
+            final_method="discount.apply_coupon", model_top3=[], model_rank=2, reason="복수 쿠폰 적용 결함",
+            disagreement="", history_ids=[], repro_test_path="repro_tests/test_x.py",
+            evidence=[Evidence(kind="rule", ref=r, note="") for r in ("BIZ-CPN-01", "BIZ-CPN-02")])
+        attempt = FixAttempt(number=1, fix=FixOutput(method="discount.apply_coupon", patch_summary="쿠폰 결함 수정",
+                                                     rule_ids=cited, history_ids=[]), diff=_work_diff(ws))
+        report = run_attack(client, load_ticket("SR-2041"), analysis, attempt, ctx)
+        results[patch] = report
+        print(f"\n[{patch}] {report.summary} (오류: {report.error}, 토큰 {ctx.budget.used})")
+        for f in report.findings:
+            print(f"  {'O' if f.verified else 'X'} {f.kind} {f.input_json} 기대 {f.expected_json} "
+                  f"수정본 {f.patched} 원본 {f.original} [{f.rule_id}] {f.explanation}")
+    for patch, report in results.items():
+        assert any(f.verified and f.kind == "under_fix" for f in report.findings), patch

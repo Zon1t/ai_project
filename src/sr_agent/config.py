@@ -45,6 +45,15 @@ COVERAGE_TIMEOUT_S = 60  # get_coverage: 전체 테스트를 테스트별 기록
 MAX_COVERAGE_TESTS = 20
 JUDGE_TEST_TIMEOUT_S = 60  # 판정 노드의 전체 테스트 실행 (약 3초, 여유 있게)
 MAX_ANALYSIS_TRIES = 2  # 재현 테스트가 원본에서 실패하지 않으면 분석 1회 재시도
+
+# 공격 (F5-3, F4-3)
+PROPERTY_TIMEOUT_S = 60  # property_attack·판정의 Hypothesis 실행
+PROPERTY_MAX_EXAMPLES = 500
+PROPERTY_CASES_REPORTED = 5  # 에이전트에 돌려줄 불일치 사례 수 (최소 사례는 따로)
+JUDGE_PROPERTY_EXAMPLES = 200  # PRD 7.2: Hypothesis 입력 200개
+ATTACK_COLLECTION = "attacks"  # 공격 이력 (Chroma)
+ATTACK_MEMORY_TOP_K = 5
+ATTACK_MAX_TURNS = 25
 COPY_IGNORE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".hypothesis", ".coverage", ".ruff_cache")
 SECRET_ENV_MARKERS = ("API_KEY", "SECRET", "TOKEN")  # 자식 프로세스에 넘기지 않는 환경 변수
 
@@ -121,7 +130,7 @@ MAX_PATCH_RETRIES = 3
 MODEL_FALLBACK: str | None = None  # 기본 모델 호출이 서버 오류로 실패할 때 쓸 모델. 사용자 결정 전까지 끔
 AGENT_REASONING_EFFORT = {"analysis": "high", "fix": "high", "attack": "medium"}
 AGENT_MAX_TURNS = 20  # 에이전트 루프 반복(LLM 호출) 상한
-TICKET_TOKEN_LIMIT = 500_000  # 티켓당 토큰 상한 (입력+출력, 모든 에이전트 합계)
+TICKET_TOKEN_LIMIT = 800_000  # 티켓당 토큰 상한 (모든 에이전트 합계). S1 실측: 분석 14만 + 시도당(수정+공격) 약 12만
 TOOL_OUTPUT_CHARS = 12000  # 도구 결과를 모델에 돌려줄 때 길이 상한
 LOG_SUMMARY_CHARS = 300  # 실행 로그의 입력·출력 요약 길이
 SEARCH_RULES_TOP_K = {"defect": 5, "standardize": 8, "security": 5}  # 수정 유형별 규칙 검색 개수

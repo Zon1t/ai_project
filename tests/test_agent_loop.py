@@ -194,3 +194,20 @@ def test_long_tool_output_is_truncated(ctx, monkeypatch):
     run_agent(client, spec(), "t", ctx)
     output = client.calls[1]["input"][-1]["output"]
     assert "생략" in output and len(output) < 80
+
+
+def test_final_turn_disables_tools_and_asks_for_result(ctx):
+    from sr_agent.agents.loop import FINAL_TURN_NOTICE
+
+    client = FakeClient(response([call("read_method", {"method": "calc.add"}, "c1")]),
+                        response([call("read_method", {"method": "calc.add"}, "c2")]),
+                        response(parsed=Answer(method="calc.add")))
+    result = run_agent(client, spec(max_turns=3), "t", ctx)
+    assert result.output == Answer(method="calc.add") and result.turns == 3
+    assert [c["tool_choice"] for c in client.calls] == ["auto", "auto", "none"]
+    assert client.calls[2]["input"][-1] == {"role": "user", "content": FINAL_TURN_NOTICE}
+
+
+def test_attack_agent_can_only_search_memory():
+    schema = REGISTRY["attack_memory"].schema()
+    assert schema["parameters"]["properties"]["op"]["enum"] == ["search"]

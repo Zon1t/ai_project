@@ -4,16 +4,20 @@
 1. 재현 테스트가 원본에서 실패하고 수정본에서 통과
 2. 기존 테스트가 수정본에서 모두 통과
 3. 변경 범위: 대상 함수가 있는 파일만 바뀌고, 그 파일에서도 대상 함수와 import 외에는 그대로
-4. 결함 영역 밖 Hypothesis 입력에서 원본과 출력 동일 → 공격 단계(4일차)에서 평가. 지금은 미평가(None)
+4. 참조 구현 비교: Hypothesis 입력 200개에서 수정본 출력 = 정답 구현 출력 (판정 명세가 있을 때).
+   불일치는 원본이 정답과 같았으면 회귀, 원본도 달랐으면 미달로 센다. 결함 영역 밖에서 원본과 같아야 한다는
+   PRD 7.2 조건을 포함한다 (영역 밖 = 원본과 정답이 같은 입력). 명세가 없으면 미평가(None).
 """
 
 import ast
 
 from sr_agent import config
+from sr_agent.tools.attack import compare_versions
 from sr_agent.tools.code import _split_method, module_path
 from sr_agent.tools.execution import run_tests
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree
-from sr_agent.workflow.state import JudgeCheck, JudgeResult
+from sr_agent.workflow.reference import build_reference
+from sr_agent.workflow.state import JudgeCheck, JudgeResult, JudgeSpec
 
 
 def _units(tree: ast.Module, skip: str) -> tuple[dict[str, str], list[str]]:
@@ -68,8 +72,37 @@ def _summ(result: dict) -> str:
     return text + (f": {failed[:3]}" if failed else "")
 
 
-def judge_defect(ws: Workspace, method: str, repro_tests: list[str]) -> JudgeResult:
-    """결함 수정 유형 판정."""
+def _short(value, limit: int = 160) -> str:
+    import json
+
+    text = json.dumps(value, ensure_ascii=False)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def reference_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
+    """수정본을 정답 구현과 Hypothesis 입력으로 비교한다 (코드만)."""
+    src = config.TARGET_SRC_SUBDIR
+    try:
+        ref = build_reference(ws, spec)
+    except ValueError as e:
+        return JudgeCheck(name="reference_property", passed=False, detail=str(e))
+    raw = compare_versions(spec.method, spec.strategy,
+                           {"original": ws.original / src, "patched": ws.work / src, "reference": ref},
+                           "reference", "patched", config.JUDGE_PROPERTY_EXAMPLES, ws.work)
+    if "error" in raw:
+        return JudgeCheck(name="reference_property", passed=False, detail=raw["error"])
+    detail = (f"입력 {raw['examples']}개 중 정답과 다름 {raw['mismatches']}개 "
+              f"(미달 {raw['under_fix']}, 회귀 {raw['regression']})")
+    if raw["minimal"]:
+        m = raw["minimal"]
+        kind = {"under_fix": "미달", "regression": "회귀"}.get(m.get("kind"), "")
+        detail += (f". 최소 사례({kind}) {_short(m['input'])}: 수정본 {_short(m['results']['patched'])}, "
+                   f"정답 {_short(m['results']['reference'])}, 원본 {_short(m['results']['original'])}")
+    return JudgeCheck(name="reference_property", passed=raw["mismatches"] == 0, detail=detail)
+
+
+def judge_defect(ws: Workspace, method: str, repro_tests: list[str], spec: JudgeSpec | None = None) -> JudgeResult:
+    """결함 수정 유형 판정. spec이 있으면 참조 구현 비교까지 한다."""
     timeout = config.JUDGE_TEST_TIMEOUT_S
     checks = []
     if not repro_tests:
@@ -87,6 +120,9 @@ def judge_defect(ws: Workspace, method: str, repro_tests: list[str]) -> JudgeRes
     problems = scope_violations(ws, method)
     checks.append(JudgeCheck(name="change_scope", passed=not problems,
                              detail="; ".join(problems) or "대상 함수만 변경"))
-    checks.append(JudgeCheck(name="outside_region_unchanged", passed=None,
-                             detail="결함 영역 밖 입력 동일성은 공격 단계(4일차)에서 평가"))
+    if spec is None:
+        checks.append(JudgeCheck(name="reference_property", passed=None,
+                                 detail="판정 명세(정답 구현) 없음 — 결함 영역 밖 입력 동일성 미평가"))
+    else:
+        checks.append(reference_check(ws, spec))
     return JudgeResult(passed=all(c.passed is not False for c in checks), checks=checks)

@@ -4,7 +4,119 @@
     "scenario": "S1",
     "type": "defect",
     "title": "쿠폰 중복 적용 시 정산 금액 음수",
-    "body": "10만 원 이상 주문에 쿠폰을 두 장 쓰면 정산 금액이 음수로 찍힙니다."
+    "body": "10만 원 이상 주문에 쿠폰을 두 장 쓰면 정산 금액이 음수로 찍힙니다.",
+    "judge": {
+      "method": "discount.apply_coupons",
+      "strategy": {
+        "args": [
+          {
+            "type": "one_of",
+            "options": [
+              {
+                "type": "sampled",
+                "values": [
+                  0,
+                  9990,
+                  50000,
+                  89990,
+                  90000,
+                  99990,
+                  100000,
+                  100010,
+                  110000,
+                  150000,
+                  300000
+                ]
+              },
+              {
+                "type": "integer",
+                "min": 0,
+                "max": 500000
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "min_size": 0,
+            "max_size": 3,
+            "items": {
+              "type": "one_of",
+              "options": [
+                {
+                  "type": "dict",
+                  "fields": {
+                    "type": {
+                      "type": "just",
+                      "value": "FIXED"
+                    },
+                    "value": {
+                      "type": "one_of",
+                      "options": [
+                        {
+                          "type": "sampled",
+                          "values": [
+                            1000,
+                            10000,
+                            50000,
+                            60000,
+                            70000,
+                            100000,
+                            150000
+                          ]
+                        },
+                        {
+                          "type": "integer",
+                          "min": 0,
+                          "max": 200000
+                        }
+                      ]
+                    },
+                    "min_order": {
+                      "type": "sampled",
+                      "values": [
+                        0,
+                        50000,
+                        90000,
+                        100000,
+                        110000
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "dict",
+                  "fields": {
+                    "type": {
+                      "type": "just",
+                      "value": "RATE"
+                    },
+                    "value": {
+                      "type": "integer",
+                      "min": 1,
+                      "max": 50
+                    },
+                    "min_order": {
+                      "type": "sampled",
+                      "values": [
+                        0,
+                        50000,
+                        90000,
+                        100000,
+                        110000
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "reference": {
+        "method": "discount.apply_coupon",
+        "code": "def apply_coupon(order_amount, coupon, current_amount=None):\n    if current_amount is None:\n        current_amount = order_amount\n    if not is_coupon_applicable(current_amount, coupon):  # BIZ-CPN-01\n        return current_amount\n    discount = calc_coupon_discount(current_amount, coupon)\n    return max(0, current_amount - discount)  # BIZ-CPN-02\n"
+      }
+    }
   },
   {
     "ticket_id": "SR-2077",

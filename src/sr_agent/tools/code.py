@@ -209,8 +209,8 @@ def _apply_imports(text: str, imports: dict | None) -> str:
     return "".join(lines)
 
 
-def apply_patch(ws: Workspace, method: str, new_code: str, imports: dict | None = None) -> dict:
-    """작업본의 대상 함수 하나를 new_code로 바꾸고, 같은 파일의 import만 추가·삭제한다.
+def replace_function(project_root: Path, method: str, new_code: str, imports: dict | None = None) -> dict:
+    """project_root(대상 프로젝트 복사본)의 함수 하나를 new_code로 바꾸고, 같은 파일의 import만 추가·삭제한다.
 
     함수 이름·인자·기본값은 바꿀 수 없다. 컴파일에 실패하면 파일을 바꾸지 않는다.
     반환: {"applied", "compile_ok", "error", "diff"}
@@ -221,8 +221,9 @@ def apply_patch(ws: Workspace, method: str, new_code: str, imports: dict | None 
     if not isinstance(new_code, str):
         return {**fail, "error": "new_code는 문자열이어야 함"}
     module, names = parsed
+    rel = f"{config.TARGET_SRC_SUBDIR}/{config.TARGET_PACKAGE}/{module}.py"
     try:
-        rel, path = module_path(ws, module)
+        path = resolve_inside(project_root, rel)
     except WorkspaceError as e:
         return {**fail, "error": str(e)}
     if not path.is_file():
@@ -255,3 +256,8 @@ def apply_patch(ws: Workspace, method: str, new_code: str, imports: dict | None 
     diff = "".join(difflib.unified_diff(original.splitlines(keepends=True), text.splitlines(keepends=True),
                                         fromfile=f"a/{rel}", tofile=f"b/{rel}", n=1))
     return {"applied": True, "compile_ok": True, "error": None, "diff": diff[:4000]}
+
+
+def apply_patch(ws: Workspace, method: str, new_code: str, imports: dict | None = None) -> dict:
+    """작업본(work/)의 대상 함수 하나를 바꾼다 (규칙은 replace_function과 같음)."""
+    return replace_function(ws.work, method, new_code, imports)

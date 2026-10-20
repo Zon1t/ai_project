@@ -2,7 +2,7 @@
 
 > 결함 위치를 예측하고, 고친 코드를 스스로 공격해 검증하는 유지보수 코드 수정 에이전트
 >
-> - 문서 상태: 초안 v0.7 (분석 에이전트 규칙 검색)
+> - 문서 상태: 초안 v0.8 (공격 에이전트, 참조 구현 판정)
 > - 프로젝트명: 미확정 (후보: 수리검, PatchProof, RedFix)
 > - 개발 형태: 1인, 5일
 > - 근거 문서: `AI 프로젝트 기획서_이종협.pptx`, `legacy.html`
@@ -18,6 +18,8 @@
 > **v0.6 변경 (2026-10-20)**: 결함 위치 예측은 참고 자료이고 최종 위치는 분석 에이전트가 근거(호출 관계·이력·재현 테스트)와 함께 정한다(F5-1). S1 기대 결과를 예측 Top-3 포함 + 에이전트 확정으로 변경(3장). 화면은 모델 예측과 에이전트 판단을 나란히(F6-3), E2E는 둘을 따로 집계(F7-2). KPI Top-3 측정 위치를 평가 분할로 명시(2장)
 >
 > **v0.7 변경 (2026-10-20)**: `search_rules`를 분석 에이전트에도 허용(7.3). 재현 테스트의 기대값을 업무 규칙으로 확인한다(F5-1)
+>
+> **v0.8 변경 (2026-10-20)**: 공격 에이전트 추가(F5-3). 결함 수정 판정에 참조 구현 비교 추가 — 미결이던 "결함 영역 밖" 정의를 정답 구현 비교로 대체(7.2, 12장). 공격 발견은 코드로 확인하고 확인된 것만 공격 이력에 저장(F4-3)
 
 ---
 
@@ -138,7 +140,7 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 |---|---|---|
 | F4-1 | 장애·조치 이력 KB | 학습 분할 티켓만 색인. `search_history`가 유사 이력 Top-k 반환 |
 | F4-2 | 사내 규칙 KB | 규칙 40건(규칙 1건 = 청크): SEC 12 · DEP 8 · STY 6 · BIZ 14. `search_rules`가 규칙 ID·설명·좋은 예 반환. 임베딩 유사도에 규칙별 코드 패턴 일치 가산점을 더해 정렬 |
-| F4-3 | 공격 이력 | 성공한 공격을 저장하고 같은 유형 티켓에서 먼저 재사용 |
+| F4-3 | 공격 이력 | 코드로 확인된 공격만 워크플로가 저장(Chroma `attacks`)하고, 같은 유형 티켓에서 공격 에이전트가 먼저 검색해 재사용 |
 
 ### F5. 에이전트 워크플로 (Must)
 
@@ -146,7 +148,7 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 |---|---|---|
 | F5-1 | 분석 에이전트 | 위치 예측·이력·호출부·커버리지 조회, 결함형은 재현 테스트 작성 후 원본 실패 확인(기대값은 `search_rules`로 찾은 업무 규칙 기준). 예측 결과는 참고 자료로 쓰고 최종 위치는 에이전트가 근거와 함께 정한다. 출력: 최종 위치, 그 위치의 모델 순위, 판단 이유(모델과 다르면 반대 이유), 근거 목록. Top-k 밖을 고르면 근거 필수 |
 | F5-2 | 수정 에이전트 | 규칙·이력을 근거로 패치. 패치 설명에 규칙 ID·이력 ID 인용 |
-| F5-3 | 공격 에이전트 | 수정 미달·회귀 두 방향으로 LLM 설계 입력 + Hypothesis 생성 입력 공격 |
+| F5-3 | 공격 에이전트 | 수정 미달·회귀 두 방향으로 LLM 설계 입력 + Hypothesis 생성 입력 공격. 발견은 코드로 다시 실행해 확인(verified)하고, 재시도 입력과 승인 화면에 붙인다. 통과·실패는 판정 노드가 정한다 |
 | F5-4 | 판정 노드 | 유형별 통과 조건(6장)을 코드로 검사. LLM이 판단하지 않음 |
 | F5-5 | 재시도 | 판정 실패 시 실패 내용을 붙여 수정 에이전트 재호출, 최대 3회, 초과 시 사람 검토로 전환 |
 | F5-6 | 사람 승인 | 승인 시에만 작업본을 결과물로 확정, 반려 시 사유 기록 |
@@ -234,7 +236,7 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 
 | 수정 유형 | 통과 조건 |
 |---|---|
-| 결함 수정 | 재현 테스트가 원본에서 실패하고 수정본에서 통과 · 기존 테스트 통과 · 결함 영역 밖 Hypothesis 입력 200개에서 원본과 출력 동일 |
+| 결함 수정 | 재현 테스트가 원본에서 실패하고 수정본에서 통과 · 기존 테스트 통과 · 변경 범위(대상 함수·import만) · Hypothesis 입력 200개에서 수정본 출력 = 참조 구현(정답) 출력. 불일치는 원본이 정답과 같았던 입력이면 회귀, 아니면 미달로 분류 (결함 영역 밖 = 원본과 정답이 같은 입력이므로 "영역 밖 원본과 동일" 조건을 포함) |
 | 코드 표준화 | Hypothesis 입력 200개에서 원본과 출력 완전 동일 · 지원 종료 API 0건 (`-W error::DeprecationWarning`으로 테스트 통과) · 팀 스타일 위반 0건 (`check_style`) |
 | 보안 진단 조치 | bandit·사내 규칙 위반 0건 · 공격 입력 무력화 · 정상 입력은 원본과 출력 동일 |
 
@@ -253,9 +255,9 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 | `apply_patch` | `method: str, new_code: str, imports: {add: list, remove: list} \| None = None` | `{applied, compile_ok, error}` | 작업본 함수 교체. 같은 파일의 import 추가·삭제만 추가 허용 (다른 파일·테스트 수정 불가) | 수정 |
 | `write_repro_test` | `name: str, code: str` | `{written, path}` | 재현 테스트 추가 (`runs/<ticket_id>/repro_tests/`, 기존 테스트 수정 불가) | 분석 |
 | `run_tests` | `version: "original"\|"patched", tests: list \| None` | `{passed, failed: [{test, trace}]}` | 테스트 실행. `original`은 `runs/<ticket_id>/original/`, `patched`는 `work/`에서 실행하며 재현 테스트를 함께 돌림 | 분석 · 수정 · 판정 |
-| `run_diff` | `method: str, inputs: list` | `[{input, original, patched, same}]` | LLM이 설계한 입력으로 원본 vs 수정본 차등 실행 | 공격 |
-| `property_attack` | `method: str, strategy_spec: dict, max_examples: int = 200` | `[{input, original, patched, same}]` | Hypothesis 전략으로 입력 생성·차등 실행, 불일치는 최소 사례로 축소 | 공격 · 판정 |
-| `attack_memory` | `op: "search"\|"save", attack_type: str, record?: dict` | `[{input, expected, actual}]` | 과거 성공 공격 재사용·저장 | 공격 |
+| `run_diff` | `method: str, inputs: list` | `[{input, original, patched, same}]` | LLM이 설계한 입력으로 원본 vs 수정본 차등 실행 | 공격 · (공격 발견 확인) |
+| `property_attack` | `method: str, strategy_spec: dict, max_examples: int = 200` | `{examples, mismatches, minimal, cases: [{input, original, patched, same}]}` | Hypothesis 전략으로 입력 생성·차등 실행(시드 고정), 불일치는 최소 사례로 축소 | 공격 · 판정(같은 실행기로 참조 구현 비교) |
+| `attack_memory` | `op: "search"\|"save", attack_type: str, record?: dict` | `[{method, kind, input, expected, actual, note}]` | 과거 성공 공격 재사용·저장. `attack_type`은 티켓 유형 | 공격(검색만) · 워크플로(확인된 공격 저장) |
 | `check_deprecated` | `version: str` | `[{location, api}]` | 지원 종료 API 검사 (AST + ruff `UP`) | 수정 · 판정 |
 | `check_style` | `version: str` | `[{location, rule_id}]` | 팀 스타일 검사 (팀이 고른 ruff 규칙 + `STY-*` AST 검사). `rule_id`는 규칙 KB의 `STY-*` ID | 수정 · 판정 |
 | `check_security` | `version: str` | `[{location, rule_id}]` | bandit + 사내 규칙 AST 검사 | 수정 · 판정 |
@@ -268,6 +270,9 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 > - 에이전트 루프는 직접 짠다 (`agents/loop.py`): `responses.parse` + strict 함수 도구, `function_call` → 같은 `call_id`의 `function_call_output`, 반복 상한, 티켓당 토큰 상한, 응답 status·거부 확인. 허용 목록 밖 도구 호출과 잘못된 인자는 실행하지 않고 오류를 결과로 돌려준다. strict 모드는 모든 인자를 required로 요구하므로 선택 인자(`top_k`, `tests`)는 null 허용 타입으로 노출하고 null이면 기본값을 쓴다.
 > - fallback은 클라이언트 측에서 한다 (OpenAI에는 서버 측 fallback 없음). SDK 재시도 후에도 5xx·연결 오류·404·429이면 `MODEL_FALLBACK`으로 다시 요청하며 실행 로그에 남긴다. 기본은 꺼짐.
 > - 작업본을 다루는 도구는 Python 함수에서 첫 인자로 `ws`(현재 티켓 Workspace)를 받는다. LLM에 노출할 때는 `ws`를 바인딩해 위 표의 인자만 보인다. 테스트용 `timeout` 인자도 노출하지 않는다.
+> - `run_diff`·`property_attack`·`attack_memory`의 형태가 자유로운 JSON 인자(`inputs`, `strategy_spec`, `record`)는 strict 스키마로 표현할 수 없어 LLM에는 JSON 문자열(`inputs_json`, `strategy_json`, `record_json`)로 노출한다.
+> - 판정의 참조 구현: 시연 시나리오는 `data/scenarios.json`의 `judge`(진입 함수, 입력 생성 규칙, 사람이 쓴 정답 함수), E2E 결함은 결함을 심기 전 원본 코드. 에이전트에는 보여 주지 않는다.
+> - 에이전트 루프의 마지막 턴은 도구를 막고 지금까지 확인한 내용으로 결과를 정리하게 한다.
 > - `run_diff`·`property_attack`의 각 입력은 위치 인자 리스트 또는 `{"args": [...], "kwargs": {...}}`. JSON으로 표현할 수 없는 값은 `{"$datetime": ISO}`, `{"$date": "YYYY-MM-DD"}`, `{"$db": {테이블: [행, ...]}}`(입력마다 새 인메모리 DB)로 쓴다.
 > - `run_diff`의 `original`·`patched`는 `{"ok": true, "value": ...}` 또는 `{"ok": false, "exception": "타입: 메시지"}`.
 > - `search_history`는 `history_id`(인용용, `HIS-` + 결함 해시)·`method`·`score`를, `search_rules`는 `title`·`severity`·`matched_pattern`(코드 패턴 일치)·`score`를 추가로 돌려준다. 이력은 학습 분할 결함만 색인한다.
@@ -360,7 +365,7 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 - [x] S2·S3 판정 "0건"의 범위 → 패치한 메서드 + 바뀐 import 줄 (7.2 검사 범위 참고)
 - [x] S1 결함의 업무 규칙 위치 → 대상 코드 docstring에서 제거하고 사내 규칙 KB(`BIZ-CPN-01·02`)로 이동 (5장)
 - [ ] S2 "출력 완전 동일" 비교 규칙: naive/aware datetime 차이, pytz·zoneinfo의 DST 처리 차이, 현재 시각 고정 방법 (기본안: 비교 전 UTC aware로 정규화, 시각은 `unittest.mock`으로 고정)
-- [ ] 결함 수정 판정의 "결함 영역 밖" 입력 범위를 코드로 정의하는 방법 (기본안: 재현 테스트 입력과 겹치지 않는 영역을 티켓 데이터에 미리 정의, LLM이 정하지 않음)
+- [x] 결함 수정 판정의 "결함 영역 밖" 입력 범위 → 영역을 따로 정의하지 않고 참조 구현(정답)과 비교. 원본과 정답이 같은 입력 = 영역 밖이며, 그곳에서 수정본이 다르면 회귀로 분류 (7.2)
 - [ ] 코드 표준화·보안 유형에서 분석 에이전트 단계 생략 여부 (기본안: 생략, 수정 에이전트부터 시작)
 - [x] 공격 에이전트에 `read_method` 허용 → 허용 (경계값 설계에 코드가 필요)
 - [ ] fallback 모델 지정 여부 (기본안: 지정하지 않음. `config.MODEL_FALLBACK = None`, 기본 모델 장애 시 티켓을 사람 검토로)
