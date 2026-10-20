@@ -130,6 +130,7 @@ class JudgeCheck(BaseModel):
     name: str
     passed: bool | None  # None = 아직 평가하지 않는 조건
     detail: str
+    data: dict = Field(default_factory=dict)  # 화면용 숫자 (통과 테스트 수, 미달·회귀 수 등)
 
 
 class JudgeResult(BaseModel):
@@ -149,16 +150,27 @@ class FixAttempt(BaseModel):
     error: str | None = None
 
 
+class Decision(BaseModel):
+    """사람 승인·반려 (F5-6)."""
+
+    status: Literal["approved", "rejected"]
+    reason: str = ""
+    decided_at: str
+    result_path: str | None = None  # 승인 시 확정한 diff 파일
+
+
 class TicketState(BaseModel):
     """티켓 진행 상태. 노드가 끝날 때마다 저장해 중단 후 이어서 실행한다."""
 
     ticket: Ticket
     status: Status = "new"
     analysis: AnalysisOutput | None = None
+    prediction: list[dict] = Field(default_factory=list)  # 결함 위치 예측 Top-3 + SHAP (화면용)
     repro_verified: bool = False
     analysis_tries: int = 0
     attempts: list[FixAttempt] = Field(default_factory=list)
     human_review_reason: str | None = None
+    decision: Decision | None = None
     tokens_used: int = 0
     run_ids: list[str] = Field(default_factory=list)
     updated_at: str = ""

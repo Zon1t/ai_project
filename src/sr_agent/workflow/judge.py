@@ -18,7 +18,7 @@ import ast
 
 from sr_agent import config
 from sr_agent.tools.attack import compare_versions
-from sr_agent.tools.checks import module_findings
+from sr_agent.tools.checks import module_findings, orphaned_import_lines
 from sr_agent.tools.code import _split_method, find_function, module_path
 from sr_agent.tools.execution import run_diff, run_tests
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree
@@ -104,7 +104,8 @@ def reference_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
         kind = {"under_fix": "미달", "regression": "회귀"}.get(m.get("kind"), "")
         detail += (f". 최소 사례({kind}) {_short(m['input'])}: 수정본 {_short(m['results']['patched'])}, "
                    f"정답 {_short(m['results']['reference'])}, 원본 {_short(m['results']['original'])}")
-    return JudgeCheck(name="reference_property", passed=raw["mismatches"] == 0, detail=detail)
+    return JudgeCheck(name="reference_property", passed=raw["mismatches"] == 0, detail=detail,
+                      data={k: raw[k] for k in ("examples", "mismatches", "under_fix", "regression")})
 
 
 def existing_tests_check(ws: Workspace, deprecation_module: str | None = None) -> JudgeCheck:
@@ -115,7 +116,9 @@ def existing_tests_check(ws: Workspace, deprecation_module: str | None = None) -
                        pytest_args=args)
     ok = "error" not in result and not result["failed"]
     detail = _summ(result) + (f" (-W error::DeprecationWarning:{deprecation_module})" if deprecation_module else "")
-    return JudgeCheck(name="existing_tests_pass", passed=ok, detail=detail)
+    data = {} if "error" in result else {"passed": result["passed"],
+                                         "failed": len(result["failed"]) + result.get("omitted", 0)}
+    return JudgeCheck(name="existing_tests_pass", passed=ok, detail=detail, data=data)
 
 
 def scope_check(ws: Workspace, method: str) -> JudgeCheck:
@@ -124,7 +127,10 @@ def scope_check(ws: Workspace, method: str) -> JudgeCheck:
 
 
 def scoped_findings(ws: Workspace, method: str, kind: str) -> list[dict]:
-    """PRD 7.2 검사 범위: 수정본에서 대상 함수 줄 범위 + 패치로 새로 생긴 import 줄의 결과만."""
+    """PRD 7.2 검사 범위: 수정본에서 대상 함수 줄 범위 + 패치로 바뀐 import 줄의 결과만.
+
+    바뀐 import = 새로 생긴 import + 패치 후 쓰지 않게 된 import (예: 사용처를 없앴는데 남은 import pytz).
+    """
     module, names = _split_method(method)
     rel, path = module_path(ws, module)
     after = ast.parse(path.read_bytes().decode("utf-8"))
@@ -135,6 +141,7 @@ def scoped_findings(ws: Workspace, method: str, kind: str) -> list[dict]:
     for n in after.body:
         if isinstance(n, ast.Import | ast.ImportFrom) and ast.unparse(n) not in old_imports:
             lines.update(range(n.lineno, n.end_lineno + 1))
+    lines |= orphaned_import_lines(ws, module)
     return [f for f in module_findings(ws, "patched", module, kind) if f["line"] in lines]
 
 
@@ -142,7 +149,7 @@ def findings_check(ws: Workspace, method: str, kind: str, name: str) -> JudgeChe
     found = scoped_findings(ws, method, kind)
     detail = "0건" if not found else f"{len(found)}건: " + "; ".join(
         f"{f['location']} {f['rule_id']} {f['detail']}" for f in found[:5])
-    return JudgeCheck(name=name, passed=not found, detail=detail)
+    return JudgeCheck(name=name, passed=not found, detail=detail, data={"findings": len(found)})
 
 
 def preserved_check(ws: Workspace, spec: JudgeSpec, name: str) -> JudgeCheck:
@@ -157,7 +164,9 @@ def preserved_check(ws: Workspace, spec: JudgeSpec, name: str) -> JudgeCheck:
         m = raw["minimal"]
         detail += (f". 최소 사례 {_short(m['input'])}: 수정본 {_short(m['results']['patched'])}, "
                    f"원본 {_short(m['results']['original'])}")
-    return JudgeCheck(name=name, passed=raw["mismatches"] == 0, detail=detail)
+    return JudgeCheck(name=name, passed=raw["mismatches"] == 0, detail=detail,
+                      data={"examples": raw["examples"], "mismatches": raw["mismatches"],
+                            "regression": raw["mismatches"]})
 
 
 def attack_inputs_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
@@ -173,7 +182,8 @@ def attack_inputs_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
     if failed:
         a, r = failed[0]
         detail += f". 실패: {a.note or _short(a.input)} → 수정본 {_short(r['patched'])}, 기대 {_short(a.expected)}"
-    return JudgeCheck(name="attack_neutralized", passed=not failed, detail=detail)
+    return JudgeCheck(name="attack_neutralized", passed=not failed, detail=detail,
+                      data={"inputs": len(rows), "neutralized": len(rows) - len(failed), "under_fix": len(failed)})
 
 
 def _result(checks: list[JudgeCheck]) -> JudgeResult:

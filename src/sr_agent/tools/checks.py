@@ -103,9 +103,41 @@ def _deprecated(tree: ast.Module, text: str, path: Path):
                     yield node.lineno, _TYPING_ALIASES[a.name], f"from typing import {a.name}"
 
 
+def _used_names(tree: ast.Module) -> set[str]:
+    return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+
+
+def orphaned_import_lines(ws: Workspace, module: str) -> set[int]:
+    """원본에서는 쓰였지만 패치 후 아무도 쓰지 않게 된 import의 줄 (패치가 남긴 찌꺼기)."""
+    rel = f"{config.TARGET_SRC_SUBDIR}/{config.TARGET_PACKAGE}/{module}.py"
+    try:
+        before = ast.parse((ws.original / rel).read_bytes().decode("utf-8"))
+        after = ast.parse((ws.work / rel).read_bytes().decode("utf-8"))
+    except (OSError, SyntaxError):
+        return set()
+    used_before, used_after = _used_names(before), _used_names(after)
+    lines: set[int] = set()
+    for node in after.body:
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            bound = {(a.asname or a.name).split(".")[0] for a in node.names}
+            if bound & used_before and not bound & used_after:
+                lines.update(range(node.lineno, node.end_lineno + 1))
+    return lines
+
+
 def check_deprecated(ws: Workspace, version: str, method: str | None = None) -> list[dict] | dict:
-    """지원 종료(예정) API 사용 (DEP-*)."""
-    return _run_check(ws, version, method, _deprecated)
+    """지원 종료(예정) API 사용 (DEP-*).
+
+    patched + method면 함수 범위에 더해, 패치로 쓰지 않게 된 지원 종료 모듈의 import 줄(예: import pytz)도 보여 준다.
+    """
+    found = _run_check(ws, version, method, _deprecated)
+    if isinstance(found, dict) or version != "patched" or method is None:
+        return found
+    module = _split_method(method)[0]
+    orphaned = orphaned_import_lines(ws, module)
+    extra = [{"location": f["location"], "rule_id": f["rule_id"], "detail": f["detail"] + " (패치 후 쓰지 않는 import)"}
+             for f in module_findings(ws, "patched", module, "deprecated") if f["line"] in orphaned]
+    return extra + found
 
 
 # ---------------- 팀 스타일 ----------------

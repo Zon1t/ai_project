@@ -14,6 +14,10 @@ from typing import Any
 from sr_agent import config
 from sr_agent.tools.workspace import Workspace
 
+DB_NOTE = ('DB 연결(conn) 인자 자리에는 {"$db": {"customers": [{"name": "김민수", "email": "a@x.com", '
+           '"phone": "010-1-2", "grade": "BASIC"}]}}처럼 테이블별 행을 넣으면 '
+           "입력마다 새 인메모리 DB(대상 프로젝트 스키마)가 만들어진다")
+
 # PRD 7.3 "사용 에이전트" 열. 아직 구현하지 않은 도구는 등록되는 대로 쓰인다.
 AGENT_TOOLS: dict[str, tuple[str, ...]] = {
     # search_rules: 재현 테스트의 기대값을 업무 규칙으로 정하려고 분석에도 허용 (PRD v0.7)
@@ -162,14 +166,16 @@ def _register_builtin() -> None:
         {"method": method,
          "inputs_json": {"type": "string", "description": "입력 목록 JSON. 각 입력은 인자 리스트 또는 "
                          '{"args": [...], "kwargs": {...}}. 날짜는 {"$date": "2024-01-31"}, '
-                         '시각은 {"$datetime": "2024-01-31T16:00:00"}'}},
+                         '시각은 {"$datetime": "2024-01-31T16:00:00"}. '
+                         + DB_NOTE}},
         run_diff_json, needs_ws=True,
     ))
     register(Tool(
         "property_attack", "Hypothesis로 입력을 많이 만들어 원본과 수정본을 비교하고, 다른 입력은 최소 사례로 줄인다.",
         {"method": method,
          "strategy_json": {"type": "string",
-                           "description": '입력 생성 규칙 JSON: {"args": [spec...], "kwargs": {...}}'},
+                           "description": '입력 생성 규칙 JSON: {"args": [spec...], "kwargs": {...}}. '
+                           '고정값은 {"type": "just", "value": ...}. ' + DB_NOTE},
          "max_examples": {"type": ["integer", "null"], "description": "생성할 입력 수 (null이면 200)"}},
         lambda ws, method, strategy_json, max_examples: property_attack(ws, method, strategy_json, max_examples),
         needs_ws=True, defaults=(("max_examples", 200),),

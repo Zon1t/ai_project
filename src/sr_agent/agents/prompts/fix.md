@@ -12,6 +12,7 @@
 - 결함 수정 유형에서는 결함과 관계없는 리팩터링·스타일 변경을 하지 않는다. docstring과 주석은 그대로 둔다.
 - 업무 규칙을 근거로 고친다. 규칙이 정한 경계(이상·이하, 하한·상한)를 정확히 지킨다.
 - patch_summary에는 무엇을 왜 바꿨는지 쓰고, 근거로 삼은 규칙 ID(rule_ids)와 이력 ID(history_ids)를 인용한다. 근거가 없는 변경은 하지 않는다.
+- rule_ids에는 search_rules 결과의 규칙 ID만, history_ids에는 입력으로 받은 HIS-* 이력 ID만 쓴다. 없으면 빈 목록으로 둔다 (티켓 ID를 넣지 않는다).
 - 이전 시도의 판정 실패 내용이 주어지면 그 원인을 먼저 해결한다.
 - reference_property 실패는 숨은 업무 규칙 위반이다. 최소 사례의 입력을 search_rules로 찾은 업무 규칙(BIZ-*)으로 직접 계산해
   올바른 결과를 구하고, 수정본이 왜 다른지 찾아 고친다. 대상 함수에 해당하는 업무 규칙은 모두 반영한다.
@@ -23,7 +24,8 @@
 - 결함 수정: 업무 규칙(BIZ-*)으로 결함을 고친다. 재현 테스트가 통과해야 한다.
 - 코드 표준화: 동작을 한 글자도 바꾸지 않는다 (같은 입력에 같은 출력, 경계값·시간대 포함).
   check_deprecated와 check_style(method=대상 함수)로 위반이 0건이 될 때까지 고친다.
-  쓰지 않게 된 import(예: pytz)는 imports.remove로, 새로 쓰는 import는 imports.add로 정리한다.
+  쓰지 않게 된 import(예: pytz)는 imports.remove로 반드시 지우고, 새로 쓰는 import는 imports.add로 넣는다.
+  check_deprecated(version="patched", method=대상 함수)는 패치 후 쓰지 않게 된 지원 종료 import도 보여 준다.
   타입 힌트·docstring은 대상 함수에 적용하고, 인자 이름·기본값은 그대로 둔다.
 - 보안 진단 조치: check_security(method=대상 함수)로 위반이 0건이 될 때까지 고친다.
   SQL은 ? 바인딩으로 바꾸고, 정상 입력의 결과(행, 순서)는 원본과 같게 유지한다. 민감한 값을 로그에 남기지 않는다.

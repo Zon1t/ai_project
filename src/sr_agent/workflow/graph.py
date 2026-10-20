@@ -20,6 +20,7 @@ from sr_agent.agents.specs import ANALYSIS, FIX, analysis_input, fix_input
 from sr_agent.llm import LLMError, LLMRefusal
 from sr_agent.tools.code import read_method
 from sr_agent.tools.execution import run_tests
+from sr_agent.tools.predict import predict_fault_location
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
 from sr_agent.workflow.attack import run_attack
 from sr_agent.workflow.judge import judge_ticket
@@ -68,6 +69,8 @@ def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress
                       detail=problem or "재현 테스트 원본 실패 확인")
         if problem is None:
             state.repro_verified = True
+            prediction = predict_fault_location(state.ticket.text, 3)  # 화면에 모델 예측과 판단을 나란히
+            state.prediction = prediction if isinstance(prediction, list) else []
             return
         progress(f"재현 확인 실패: {problem}")
         feedback = problem

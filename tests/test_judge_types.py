@@ -145,3 +145,17 @@ def test_check_tools(tmp_path):
     assert style_all == {"STY-01", "STY-02"}
     assert "error" in check_style(ws, "original", "nomodule.f")
     assert "error" in check_deprecated(ws, "unknown")  # 잘못된 version
+
+
+def test_orphaned_deprecated_import_counts(tmp_path):
+    """함수 안 pytz 사용은 없앴지만 import pytz를 남긴 패치는 통과하면 안 된다."""
+    code, imports = S2_PATCHES["good"]
+    kept = {"add": imports["add"], "remove": []}
+    result, ws = _judge(tmp_path, "SR-2077", code, kept)
+    checks = _checks(result)
+    assert checks["deprecated_zero"] is False and not result.passed
+    assert "import pytz" in next(c.detail for c in result.checks if c.name == "deprecated_zero")
+    found = check_deprecated(ws, "patched", "settlement.calc_due_date")
+    assert [f["rule_id"] for f in found] == ["DEP-TZ-01"] and "쓰지 않는 import" in found[0]["detail"]
+    # 원본에서도 안 쓰던 import(typing Tuple은 # type: 주석에서만 씀)는 세지 않는다
+    assert all("typing" not in f["detail"] for f in found)

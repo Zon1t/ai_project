@@ -35,6 +35,8 @@ TICKET_DRAFTS_PATH = TICKETS_DIR / "drafts.jsonl"  # F2-3 LLM 응답 (결함 단
 TICKETS_CSV_PATH = TICKETS_DIR / "tickets.csv"  # F2-4 분할까지 반영한 티켓 데이터셋
 SPLIT_PATH = TICKETS_DIR / "split.json"
 EVAL_RESULTS_DIR = PROJECT_ROOT / "eval" / "results"
+REPLAY_DIR = DATA_DIR / "replay"  # 시연용 사전 실행 결과 (PRD 9장)
+REPLAY_EVENT_DELAY_S = 0.04  # 재생 모드에서 진행 메시지 사이 간격
 
 # 재현성 (분할, Hypothesis, 학습)
 SEED = 42

@@ -34,6 +34,8 @@ REPRO = "from order_settlement import calc\n\n\ndef test_never_negative():\n    
 WEAK = "from order_settlement import calc\n\n\ndef test_ok():\n    assert calc.payable(500, 100) == 400\n"
 GOOD = "def payable(amount, discount):\n    return max(0, amount - discount)\n"
 BAD = "def payable(amount, discount):\n    return 0\n"
+PREDICTION = [{"method": "calc.settle", "score": 0.9, "reasons": []},
+              {"method": "calc.payable", "score": 0.5, "reasons": []}]
 
 
 def analysis_output(path="repro_tests/test_never_negative.py"):
@@ -85,6 +87,7 @@ def run(bug_target, tmp_path, monkeypatch):
     def _run(agents, ticket=TICKET, **kw):
         monkeypatch.setattr(graph, "run_agent", agents)
         monkeypatch.setattr(attack_mod, "run_agent", agents)
+        monkeypatch.setattr(graph, "predict_fault_location", lambda text, k: PREDICTION)
         return graph.run_ticket(ticket, client=None, source=bug_target, runs_dir=tmp_path / "runs", **kw)
     return _run
 
@@ -98,6 +101,7 @@ def test_happy_path(run, tmp_path):
     assert state.tokens_used == 150
     saved = TicketState.load(tmp_path / "runs" / "SR-BUG" / config.STATE_FILENAME)
     assert saved.status == "approval_pending" and saved.analysis.final_method == "calc.payable"
+    assert saved.prediction == PREDICTION
     log = [json.loads(line) for line in (tmp_path / "runs" / f"{state.run_ids[0]}.jsonl").read_text(
         encoding="utf-8").splitlines()]
     assert [r["kind"] for r in log] == ["verify", "verify", "judge", "end"]  # 재현 확인, 공격 확인, 판정
