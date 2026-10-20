@@ -5,7 +5,7 @@
   판정 실패 시 실패 내용을 붙여 수정 재시도 (첫 시도 + config.MAX_PATCH_RETRIES회), 초과하면 사람 검토
 노드 사이에는 구조화 결과만 넘기고, 노드가 끝날 때마다 state.json에 저장한다 (중단 후 이어서 실행).
 공격 발견은 코드로 다시 확인해 기록하고 재시도 입력에 붙인다. 통과·실패는 판정 노드가 정한다.
-지금은 결함 수정 유형만 판정한다.
+코드 표준화·보안 유형은 분석을 건너뛰고 티켓에 적힌 대상 함수로 수정부터 한다 (PRD 12장 기본안).
 """
 
 from collections.abc import Callable
@@ -22,7 +22,7 @@ from sr_agent.tools.code import read_method
 from sr_agent.tools.execution import run_tests
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
 from sr_agent.workflow.attack import run_attack
-from sr_agent.workflow.judge import judge_defect
+from sr_agent.workflow.judge import judge_ticket
 from sr_agent.workflow.state import FixAttempt, Ticket, TicketState
 
 FINAL = {"approval_pending", "human_review", "approved", "rejected"}
@@ -76,6 +76,8 @@ def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress
 
 def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None]) -> None:
     analysis = state.analysis
+    method = analysis.final_method if analysis else state.ticket.method
+    repro = [analysis.repro_test_path] if analysis else []
     while not state.passed and len(state.attempts) < 1 + config.MAX_PATCH_RETRIES:
         number = len(state.attempts) + 1
         progress(f"수정 에이전트 실행 (시도 {number}/{1 + config.MAX_PATCH_RETRIES})")
@@ -88,7 +90,7 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         progress("공격 에이전트 실행")
         attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx)
         progress(f"공격 발견 {len(attempt.attack.verified())}건 (확인됨) → 판정 (코드)")
-        attempt.judge = judge_defect(ctx.ws, analysis.final_method, [analysis.repro_test_path], state.ticket.judge)
+        attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro)
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
         state.attempts.append(attempt)
@@ -110,8 +112,8 @@ def run_ticket(
     progress: Callable[[str], None] = lambda msg: None,
 ) -> TicketState:
     """티켓을 끝까지 처리한다. state.json이 있으면 끝난 단계는 건너뛰고 이어서 실행한다."""
-    if ticket.type != "defect":
-        raise NotImplementedError(f"{ticket.type} 유형 판정은 4일차에 추가 (지금은 결함 수정만)")
+    if ticket.type != "defect" and not ticket.method:
+        raise ValueError(f"{ticket.type} 유형 티켓에는 대상 함수(method)가 필요함: {ticket.ticket_id}")
     ws = prepare_workspace(ticket.ticket_id, source=source, runs_dir=runs_dir, overwrite=restart)
     state = None if restart else TicketState.load(ws.state_path)
     if state is not None and state.status in FINAL:
@@ -122,7 +124,7 @@ def run_ticket(
     ctx.budget.used = state.tokens_used
     state.run_ids.append(ctx.log.run_id)
     try:
-        if not state.repro_verified:
+        if ticket.type == "defect" and not state.repro_verified:
             state.status = "analyzing"
             state.save(ws.state_path)
             _analysis_node(client, state, ctx, progress)

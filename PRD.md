@@ -2,7 +2,7 @@
 
 > 결함 위치를 예측하고, 고친 코드를 스스로 공격해 검증하는 유지보수 코드 수정 에이전트
 >
-> - 문서 상태: 초안 v0.8 (공격 에이전트, 참조 구현 판정)
+> - 문서 상태: 초안 v0.9 (판정 3유형)
 > - 프로젝트명: 미확정 (후보: 수리검, PatchProof, RedFix)
 > - 개발 형태: 1인, 5일
 > - 근거 문서: `AI 프로젝트 기획서_이종협.pptx`, `legacy.html`
@@ -20,6 +20,8 @@
 > **v0.7 변경 (2026-10-20)**: `search_rules`를 분석 에이전트에도 허용(7.3). 재현 테스트의 기대값을 업무 규칙으로 확인한다(F5-1)
 >
 > **v0.8 변경 (2026-10-20)**: 공격 에이전트 추가(F5-3). 결함 수정 판정에 참조 구현 비교 추가 — 미결이던 "결함 영역 밖" 정의를 정답 구현 비교로 대체(7.2, 12장). 공격 발견은 코드로 확인하고 확인된 것만 공격 이력에 저장(F4-3)
+>
+> **v0.9 변경 (2026-10-20)**: 코드 표준화·보안 판정 구현(7.2 세부 조건), 검사 도구에 범위 인자 `method` 추가(7.3), 코드 표준화·보안 유형은 분석 생략, S2 출력 비교 규칙 확정(12장)
 
 ---
 
@@ -237,8 +239,8 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 | 수정 유형 | 통과 조건 |
 |---|---|
 | 결함 수정 | 재현 테스트가 원본에서 실패하고 수정본에서 통과 · 기존 테스트 통과 · 변경 범위(대상 함수·import만) · Hypothesis 입력 200개에서 수정본 출력 = 참조 구현(정답) 출력. 불일치는 원본이 정답과 같았던 입력이면 회귀, 아니면 미달로 분류 (결함 영역 밖 = 원본과 정답이 같은 입력이므로 "영역 밖 원본과 동일" 조건을 포함) |
-| 코드 표준화 | Hypothesis 입력 200개에서 원본과 출력 완전 동일 · 지원 종료 API 0건 (`-W error::DeprecationWarning`으로 테스트 통과) · 팀 스타일 위반 0건 (`check_style`) |
-| 보안 진단 조치 | bandit·사내 규칙 위반 0건 · 공격 입력 무력화 · 정상 입력은 원본과 출력 동일 |
+| 코드 표준화 | Hypothesis 입력 200개에서 원본과 출력 완전 동일 · 지원 종료 API 0건 (`check_deprecated`) · 팀 스타일 위반 0건 (`check_style`) · 기존 테스트 통과 (대상 모듈의 DeprecationWarning을 오류로: `-W error::DeprecationWarning:order_settlement.<모듈>`) · 변경 범위 |
+| 보안 진단 조치 | bandit·사내 규칙 위반 0건 (`check_security`) · 공격 입력 무력화 (시나리오에 정한 공격 입력에서 정한 안전한 결과) · 정상 입력 Hypothesis 200개에서 원본과 출력 동일 · 기존 테스트 통과 · 변경 범위 |
 
 > **검사 범위**: "0건" 조건(지원 종료 API, 팀 스타일, bandit, 사내 규칙)은 패치한 메서드의 줄 범위와 패치로 추가·삭제된 import 줄에서 나온 결과만 센다. 대상 프로젝트에는 다른 티켓용 재료(`utcnow` 9곳, SQL 조립 7곳)가 일부러 남아 있으므로 파일·프로젝트 전체를 기준으로 삼지 않는다. 테스트(`-W error::DeprecationWarning` 포함)는 전체를 실행한다.
 
@@ -258,9 +260,9 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 | `run_diff` | `method: str, inputs: list` | `[{input, original, patched, same}]` | LLM이 설계한 입력으로 원본 vs 수정본 차등 실행 | 공격 · (공격 발견 확인) |
 | `property_attack` | `method: str, strategy_spec: dict, max_examples: int = 200` | `{examples, mismatches, minimal, cases: [{input, original, patched, same}]}` | Hypothesis 전략으로 입력 생성·차등 실행(시드 고정), 불일치는 최소 사례로 축소 | 공격 · 판정(같은 실행기로 참조 구현 비교) |
 | `attack_memory` | `op: "search"\|"save", attack_type: str, record?: dict` | `[{method, kind, input, expected, actual, note}]` | 과거 성공 공격 재사용·저장. `attack_type`은 티켓 유형 | 공격(검색만) · 워크플로(확인된 공격 저장) |
-| `check_deprecated` | `version: str` | `[{location, api}]` | 지원 종료 API 검사 (AST + ruff `UP`) | 수정 · 판정 |
-| `check_style` | `version: str` | `[{location, rule_id}]` | 팀 스타일 검사 (팀이 고른 ruff 규칙 + `STY-*` AST 검사). `rule_id`는 규칙 KB의 `STY-*` ID | 수정 · 판정 |
-| `check_security` | `version: str` | `[{location, rule_id}]` | bandit + 사내 규칙 AST 검사 | 수정 · 판정 |
+| `check_deprecated` | `version: str, method: str \| None = None` | `[{location, rule_id, detail}]` | 지원 종료 API 검사 (AST). `rule_id`는 `DEP-*` | 수정 · 판정 |
+| `check_style` | `version: str, method: str \| None = None` | `[{location, rule_id, detail}]` | 팀 스타일 검사 (AST·tokenize, ruff 규칙과 같은 기준). `rule_id`는 `STY-*` | 수정 · 판정 |
+| `check_security` | `version: str, method: str \| None = None` | `[{location, rule_id, detail}]` | bandit + 사내 규칙 AST 검사. bandit 결과는 사내 규칙 ID로 연결 (예: B608 → `SEC-SQL-01`) | 수정 · 판정 |
 
 > `search_rules`를 분석 에이전트에도 허용했다(v0.7): 재현 테스트의 기대값을 업무 규칙으로 정해야 한다. S1 첫 실행에서 분석 에이전트가 규칙을 모른 채 "결제 금액 0원"을 기대해, 수정 에이전트가 BIZ-CPN-01을 적용하지 못했다(재현 테스트는 고칠 수 없으므로).
 >
@@ -364,9 +366,9 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 
 - [x] S2·S3 판정 "0건"의 범위 → 패치한 메서드 + 바뀐 import 줄 (7.2 검사 범위 참고)
 - [x] S1 결함의 업무 규칙 위치 → 대상 코드 docstring에서 제거하고 사내 규칙 KB(`BIZ-CPN-01·02`)로 이동 (5장)
-- [ ] S2 "출력 완전 동일" 비교 규칙: naive/aware datetime 차이, pytz·zoneinfo의 DST 처리 차이, 현재 시각 고정 방법 (기본안: 비교 전 UTC aware로 정규화, 시각은 `unittest.mock`으로 고정)
+- [x] S2 "출력 완전 동일" 비교 규칙 → 입력은 함수 계약대로 naive UTC 시각(월말·KST 자정·윤년 경계를 섞음), 결과(date)는 값 그대로 비교. 현재 시각을 쓰는 기본값 경로는 대상 모듈 DeprecationWarning을 오류로 한 기존 테스트로 확인해 시각 고정이 필요 없음
 - [x] 결함 수정 판정의 "결함 영역 밖" 입력 범위 → 영역을 따로 정의하지 않고 참조 구현(정답)과 비교. 원본과 정답이 같은 입력 = 영역 밖이며, 그곳에서 수정본이 다르면 회귀로 분류 (7.2)
-- [ ] 코드 표준화·보안 유형에서 분석 에이전트 단계 생략 여부 (기본안: 생략, 수정 에이전트부터 시작)
+- [x] 코드 표준화·보안 유형의 분석 단계 → 생략. 진단 결과가 위치를 알려 주므로 티켓 데이터에 대상 함수(`method`)를 두고 수정부터 시작
 - [x] 공격 에이전트에 `read_method` 허용 → 허용 (경계값 설계에 코드가 필요)
 - [ ] fallback 모델 지정 여부 (기본안: 지정하지 않음. `config.MODEL_FALLBACK = None`, 기본 모델 장애 시 티켓을 사람 검토로)
 - [ ] 재시도 기준: 트리거는 판정 실패, "최대 3회"는 첫 시도 이후 재시도 3회 = 공격·판정 최대 4라운드 (기본안). E2E에서 통과한 재시도 차수를 기록해 4회 상향 여부 결정

@@ -101,6 +101,7 @@ def execute(name: str, arguments: str, allowed: set[str], ws: Workspace | None) 
 
 def _register_builtin() -> None:
     from sr_agent.tools.attack import attack_memory, property_attack, run_diff_json
+    from sr_agent.tools.checks import check_deprecated, check_security, check_style
     from sr_agent.tools.code import apply_patch, get_callers, read_method
     from sr_agent.tools.execution import run_tests
     from sr_agent.tools.predict import predict_fault_location
@@ -182,6 +183,15 @@ def _register_builtin() -> None:
                          "description": '{"method": "모듈.함수"} (선택, 같은 함수 공격을 앞에 둔다)'}},
         lambda op, attack_type, record_json: attack_memory(op, attack_type, record_json),
     ))
+    version = {"type": "string", "enum": ["original", "patched"]}
+    scoped = {"type": ["string", "null"], "description": "모듈.함수로 범위 제한 (null이면 프로젝트 전체)"}
+    for name, func, what in (
+        ("check_deprecated", check_deprecated, "지원 종료(예정) API 사용 (DEP-*)"),
+        ("check_style", check_style, "팀 스타일 규칙 위반 (STY-*)"),
+        ("check_security", check_security, "bandit + 사내 보안 규칙 위반 (SEC-*)"),
+    ):
+        register(Tool(name, f"{what}을 찾는다. 결과의 rule_id는 사내 규칙 ID다.",
+                      {"version": version, "method": scoped}, func, needs_ws=True))
     register(Tool(
         "run_tests",
         "테스트를 실행한다. original은 원본 복사본, patched는 작업본에서 돌리며 재현 테스트를 함께 돌린다.",

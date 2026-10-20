@@ -112,7 +112,7 @@ def _summarize(results: list[dict], version_dir: Path, repro_dir: Path) -> dict:
 
 
 def run_tests(ws: Workspace, version: str, tests: list[str] | None = None,
-              timeout: float | None = None) -> dict:
+              timeout: float | None = None, pytest_args: list[str] | None = None) -> dict:
     """original 또는 patched 버전에서 테스트를 실행한다.
 
     tests=None이면 대상 프로젝트 테스트 전체와 repro_tests/를 함께 돌린다.
@@ -136,7 +136,7 @@ def run_tests(ws: Workspace, version: str, tests: list[str] | None = None,
     cmd = [
         sys.executable, "-m", "pytest", "-q",
         "-p", "no:cacheprovider", "-p", "sr_agent.tools._pytest_report",
-        "--rootdir", str(version_dir), "-c", str(ini), *targets,
+        "--rootdir", str(version_dir), "-c", str(ini), *(pytest_args or []), *targets,
     ]
     proc = _run(cmd, version_dir, timeout, extra_env={"SR_AGENT_REPORT": str(report)})
     if proc is None:

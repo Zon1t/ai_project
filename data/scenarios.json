@@ -123,13 +123,305 @@
     "scenario": "S2",
     "type": "standardize",
     "title": "정산 마감일 계산 코드 표준화",
-    "body": "Python 3.12 전환 대비 및 팀 코드 표준 점검입니다. 정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거하고, 팀 코딩 표준에 맞게 정리해 주세요."
+    "body": "Python 3.12 전환 대비 및 팀 코드 표준 점검입니다. 정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거하고, 팀 코딩 표준에 맞게 정리해 주세요.",
+    "method": "settlement.calc_due_date",
+    "judge": {
+      "method": "settlement.calc_due_date",
+      "strategy": {
+        "args": [
+          {
+            "type": "one_of",
+            "options": [
+              {
+                "type": "sampled",
+                "values": [
+                  {
+                    "$datetime": "2024-01-31T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-01-31T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-02-28T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-02-29T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-02-29T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-03-31T15:00:00"
+                  },
+                  {
+                    "$datetime": "2024-11-30T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-12-31T14:59:59"
+                  },
+                  {
+                    "$datetime": "2024-12-31T15:00:00"
+                  },
+                  {
+                    "$datetime": "2025-01-01T00:00:00"
+                  },
+                  {
+                    "$datetime": "2025-02-28T15:00:00"
+                  },
+                  {
+                    "$datetime": "2025-09-30T15:00:00"
+                  }
+                ]
+              },
+              {
+                "type": "datetime",
+                "min": "2024-01-01T00:00:00",
+                "max": "2025-12-31T23:59:59"
+              }
+            ]
+          }
+        ]
+      }
+    }
   },
   {
     "ticket_id": "SR-2103",
     "scenario": "S3",
     "type": "security",
     "title": "시큐어코딩 진단: SQL 문자열 결합",
-    "body": "시큐어코딩 진단 결과, customer_dao.find_by_name에서 f-string으로 SQL을 조립하고 있습니다. 조치 바랍니다."
+    "body": "시큐어코딩 진단 결과, customer_dao.find_by_name에서 f-string으로 SQL을 조립하고 있습니다. 조치 바랍니다.",
+    "method": "customer_dao.find_by_name",
+    "judge": {
+      "method": "customer_dao.find_by_name",
+      "strategy": {
+        "args": [
+          {
+            "type": "just",
+            "value": {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "one_of",
+            "options": [
+              {
+                "type": "sampled",
+                "values": [
+                  "김민수",
+                  "이서연",
+                  "박지훈",
+                  "최없음",
+                  "",
+                  " 김민수",
+                  "김민수 "
+                ]
+              },
+              {
+                "type": "text",
+                "alphabet": "가나다김이박민수서연지훈abcXYZ0123 ",
+                "max_size": 8
+              }
+            ]
+          }
+        ]
+      },
+      "attack_inputs": [
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "' OR '1'='1"
+          ],
+          "expected": [],
+          "note": "항상 참 조건으로 전체 조회"
+        },
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "김민수' --"
+          ],
+          "expected": [],
+          "note": "주석으로 뒤 조건 무시"
+        },
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "x' UNION SELECT id, name, email, phone, grade, created_at FROM customers --"
+          ],
+          "expected": [],
+          "note": "UNION으로 다른 행 조회"
+        },
+        {
+          "input": [
+            {
+              "$db": {
+                "customers": [
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim@example.com",
+                    "phone": "010-1234-5678",
+                    "grade": "BASIC",
+                    "created_at": "2024-01-05 09:00:00"
+                  },
+                  {
+                    "name": "이서연",
+                    "email": "seoyeon.lee@example.com",
+                    "phone": "010-2222-3333",
+                    "grade": "GOLD",
+                    "created_at": "2024-01-06 10:00:00"
+                  },
+                  {
+                    "name": "박지훈",
+                    "email": "jihoon.park@example.com",
+                    "phone": "010-4444-5678",
+                    "grade": "SILVER",
+                    "created_at": "2024-01-07 11:00:00"
+                  },
+                  {
+                    "name": "김민수",
+                    "email": "minsu.kim2@example.com",
+                    "phone": "010-9999-0000",
+                    "grade": "VIP",
+                    "created_at": "2024-01-08 12:00:00"
+                  }
+                ]
+              }
+            },
+            "O'Brien"
+          ],
+          "expected": [],
+          "note": "따옴표가 든 정상 이름 (오류 없이 빈 결과)"
+        }
+      ]
+    }
   }
 ]

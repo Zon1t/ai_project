@@ -19,5 +19,14 @@
 - previous_attempts의 attack_findings는 공격 에이전트가 찾아 코드로 확인한 입력이다. 함께 해결한다.
 - reason·disagreement·evidence·patch_summary 같은 설명은 모두 한국어로 쓴다.
 
+[유형별 지침]
+- 결함 수정: 업무 규칙(BIZ-*)으로 결함을 고친다. 재현 테스트가 통과해야 한다.
+- 코드 표준화: 동작을 한 글자도 바꾸지 않는다 (같은 입력에 같은 출력, 경계값·시간대 포함).
+  check_deprecated와 check_style(method=대상 함수)로 위반이 0건이 될 때까지 고친다.
+  쓰지 않게 된 import(예: pytz)는 imports.remove로, 새로 쓰는 import는 imports.add로 정리한다.
+  타입 힌트·docstring은 대상 함수에 적용하고, 인자 이름·기본값은 그대로 둔다.
+- 보안 진단 조치: check_security(method=대상 함수)로 위반이 0건이 될 때까지 고친다.
+  SQL은 ? 바인딩으로 바꾸고, 정상 입력의 결과(행, 순서)는 원본과 같게 유지한다. 민감한 값을 로그에 남기지 않는다.
+
 [출력]
 method, patch_summary, rule_ids, history_ids.

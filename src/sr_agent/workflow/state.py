@@ -21,12 +21,26 @@ class ReferenceImpl(BaseModel):
     code: str
 
 
+class AttackInput(BaseModel):
+    """보안 판정: 공격 입력과 수정본이 내야 할 안전한 결과."""
+
+    input: list | dict  # run_diff 입력 하나
+    expected: object  # 기대 결과 값 (run_diff 표기)
+    note: str = ""
+
+
 class JudgeSpec(BaseModel):
-    """판정용 속성 검사 명세: 진입 함수, 입력 생성 규칙, 정답 구현."""
+    """판정 명세 (사람이 미리 정함, 에이전트는 보지 않음).
+
+    - 결함 수정: method + strategy + reference(정답 함수) → 수정본 = 정답
+    - 코드 표준화: method + strategy → 수정본 = 원본 (동작 완전 보존)
+    - 보안: method + strategy(정상 입력) → 수정본 = 원본, attack_inputs → 안전한 결과
+    """
 
     method: str  # Hypothesis로 호출할 진입 함수 (예: discount.apply_coupons)
     strategy: dict  # property_attack과 같은 strategy_spec
-    reference: ReferenceImpl
+    reference: ReferenceImpl | None = None
+    attack_inputs: list[AttackInput] = Field(default_factory=list)
 
 
 class Ticket(BaseModel):
@@ -37,6 +51,7 @@ class Ticket(BaseModel):
     title: str
     body: str
     scenario: str | None = None
+    method: str | None = None  # 코드 표준화·보안: 진단이 알려 준 대상 함수 (분석 단계를 건너뜀)
     judge: JudgeSpec | None = None
 
     @property

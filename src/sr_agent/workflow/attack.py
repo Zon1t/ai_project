@@ -57,7 +57,7 @@ def verify_finding(ws: Workspace, finding: AttackFinding) -> VerifiedFinding:
     return out
 
 
-def run_attack(client: OpenAI, ticket: Ticket, analysis: AnalysisOutput, attempt: FixAttempt,
+def run_attack(client: OpenAI, ticket: Ticket, analysis: AnalysisOutput | None, attempt: FixAttempt,
                ctx: RunContext) -> AttackReport:
     """공격 에이전트를 돌리고 발견을 확인한다. 공격 실패(반복 상한·응답 오류)는 기록만 하고 판정으로 넘어간다."""
     report = AttackReport()

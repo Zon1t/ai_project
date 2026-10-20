@@ -82,10 +82,10 @@ def isolated_memory(tmp_path, monkeypatch):
 
 @pytest.fixture
 def run(bug_target, tmp_path, monkeypatch):
-    def _run(agents, **kw):
+    def _run(agents, ticket=TICKET, **kw):
         monkeypatch.setattr(graph, "run_agent", agents)
         monkeypatch.setattr(attack_mod, "run_agent", agents)
-        return graph.run_ticket(TICKET, client=None, source=bug_target, runs_dir=tmp_path / "runs", **kw)
+        return graph.run_ticket(ticket, client=None, source=bug_target, runs_dir=tmp_path / "runs", **kw)
     return _run
 
 
@@ -159,9 +159,27 @@ def test_resume_skips_finished_analysis(run, tmp_path):
     assert len(resumed.run_ids) == 2 and resumed.tokens_used == state.tokens_used + 50
 
 
-def test_non_defect_type_not_supported_yet(run):
-    with pytest.raises(NotImplementedError):
-        graph.run_ticket(TICKET.model_copy(update={"type": "security"}), client=None)
+def test_non_defect_ticket_needs_method(run):
+    with pytest.raises(ValueError, match="대상 함수"):
+        graph.run_ticket(TICKET.model_copy(update={"type": "security", "judge": None}), client=None)
+
+
+STANDARD = 'def payable(amount: int, discount: int) -> int:\n    """결제 금액."""\n    return amount - discount\n'
+
+
+def test_standardize_skips_analysis_and_uses_type_judge(run):
+    ticket = TICKET.model_copy(update={
+        "type": "standardize", "method": "calc.payable",
+        "judge": JudgeSpec(method="calc.payable", strategy=TICKET.judge.strategy)})
+    agents = FakeAgents(patches=[STANDARD])
+    state = run(agents, ticket=ticket)
+    assert agents.inputs["analysis"] == [] and state.analysis is None
+    assert json.loads(agents.inputs["fix"][0])["analysis"]["method"] == "calc.payable"
+    checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
+    assert checks == {"behavior_preserved": True, "deprecated_zero": True, "style_zero": True,
+                      "existing_tests_pass": True, "change_scope": True}
+    assert state.status == "approval_pending"
+
 
 
 UNDER = AttackFinding(kind="under_fix", method="calc.payable", input_json="[100, 300]", expected_json="0",

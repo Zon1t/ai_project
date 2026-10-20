@@ -51,12 +51,13 @@ def analysis_input(ticket: Ticket, feedback: str | None = None) -> str:
     return text
 
 
-def fix_input(ticket: Ticket, analysis: AnalysisOutput, previous: list[FixAttempt]) -> str:
+def fix_input(ticket: Ticket, analysis: AnalysisOutput | None, previous: list[FixAttempt]) -> str:
     payload = {
         "ticket": {"id": ticket.ticket_id, "type": TYPE_LABELS[ticket.type], "title": ticket.title,
                    "body": ticket.body},
         "analysis": {"method": analysis.final_method, "reason": analysis.reason,
-                     "repro_test": analysis.repro_test_path, "history_ids": analysis.history_ids},
+                     "repro_test": analysis.repro_test_path, "history_ids": analysis.history_ids}
+        if analysis else {"method": ticket.method, "note": "진단 결과가 알려 준 대상 함수 (분석 단계 없음)"},
         "search_rules_top_k": config.SEARCH_RULES_TOP_K[ticket.type],
     }
     if previous:
@@ -71,7 +72,7 @@ def fix_input(ticket: Ticket, analysis: AnalysisOutput, previous: list[FixAttemp
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def attack_input(ticket: Ticket, analysis: AnalysisOutput, fix: FixOutput | None, diff: str) -> str:
+def attack_input(ticket: Ticket, analysis: AnalysisOutput | None, fix: FixOutput | None, diff: str) -> str:
     """공격 에이전트 입력: 티켓, 결함 위치, 패치 설명, 근거 규칙 본문, diff. 정답 구현(판정 명세)은 넣지 않는다.
 
     근거 규칙은 수정 에이전트가 인용한 것과 분석 에이전트가 근거로 찾은 것을 모두 넣는다
@@ -79,10 +80,12 @@ def attack_input(ticket: Ticket, analysis: AnalysisOutput, fix: FixOutput | None
     """
     rules = {r["rule_id"]: r for r in load_rules()}
     cited = list(dict.fromkeys([*(fix.rule_ids if fix else []),
-                                *(e.ref for e in analysis.evidence if e.kind == "rule")]))
+                                *(e.ref for e in analysis.evidence if e.kind == "rule")] if analysis else
+                               [*(fix.rule_ids if fix else [])]))
     payload = {
         "ticket": {"id": ticket.ticket_id, "type": ticket.type, "title": ticket.title, "body": ticket.body},
-        "analysis": {"method": analysis.final_method, "reason": analysis.reason},
+        "analysis": ({"method": analysis.final_method, "reason": analysis.reason} if analysis
+                     else {"method": ticket.method}),
         "fix": {"method": fix.method, "patch_summary": fix.patch_summary} if fix else None,
         "rules": [{"rule_id": rid, "title": rules[rid]["title"], "description": rules[rid]["description"]}
                   for rid in cited if rid in rules],
