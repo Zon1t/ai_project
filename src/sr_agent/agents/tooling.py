@@ -99,15 +99,41 @@ def execute(name: str, arguments: str, allowed: set[str], ws: Workspace | None) 
 # ---------------- 등록 (구현된 도구부터) ----------------
 
 def _register_builtin() -> None:
-    from sr_agent.tools.code import read_method
+    from sr_agent.tools.code import apply_patch, get_callers, read_method
     from sr_agent.tools.execution import run_tests
     from sr_agent.tools.predict import predict_fault_location
     from sr_agent.tools.search import search_history, search_rules
+    from sr_agent.tools.testing import get_coverage, write_repro_test
 
     top_k = {"type": ["integer", "null"], "description": "결과 개수 (null이면 기본값)"}
+    method = {"type": "string", "description": "모듈.함수 (예: discount.apply_coupon)"}
+    register(Tool("get_callers", "이 함수를 직접 호출하는 함수 목록 (정적 분석).", {"method": method},
+                  get_callers, needs_ws=True))
+    register(Tool("get_coverage", "이 함수의 줄을 실행하는 기존 테스트와 지나간 줄 수.", {"method": method},
+                  get_coverage, needs_ws=True))
+    register(Tool(
+        "write_repro_test",
+        "재현 테스트를 repro_tests/test_<name>.py로 쓴다. order_settlement를 import하고 데이터는 테스트 안에서 "
+        "만든다(기존 conftest 픽스처 사용 불가). 올바른 동작을 기대하도록 쓴다.",
+        {"name": {"type": "string", "description": "파일 이름 (영문 소문자·숫자·_)"},
+         "code": {"type": "string", "description": "pytest 테스트 코드 전체"}},
+        write_repro_test, needs_ws=True,
+    ))
+    register(Tool(
+        "apply_patch",
+        "작업본의 대상 함수 하나를 new_code(함수 정의 전체)로 바꾼다. 함수 이름·인자·기본값은 유지해야 한다. "
+        "같은 파일의 import 추가·삭제만 imports로 할 수 있다.",
+        {"method": method,
+         "new_code": {"type": "string", "description": "def로 시작하는 함수 정의 전체"},
+         "imports": {"type": ["object", "null"], "description": "import 변경 (없으면 null)",
+                     "properties": {"add": {"type": "array", "items": {"type": "string"}},
+                                    "remove": {"type": "array", "items": {"type": "string"}}},
+                     "required": ["add", "remove"], "additionalProperties": False}},
+        apply_patch, needs_ws=True,
+    ))
     register(Tool(
         "read_method", "작업본에서 함수 소스를 읽는다. 첫 줄에 파일과 줄 범위가 붙는다.",
-        {"method": {"type": "string", "description": "모듈.함수 (예: discount.apply_coupon)"}},
+        {"method": method},
         read_method, needs_ws=True,
     ))
     register(Tool(

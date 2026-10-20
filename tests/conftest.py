@@ -76,3 +76,61 @@ def ws(mini_target, tmp_path):
 @pytest.fixture
 def work_calc(ws) -> Path:
     return ws.work / "src" / "order_settlement" / "calc.py"
+
+
+BUG_SOURCE = textwrap.dedent('''\
+    """정산 계산 (테스트용)."""
+    from order_settlement import fees
+    from order_settlement.fees import rate
+
+
+    def payable(amount, discount):
+        """결제 금액 (0원 하한이 빠진 결함)."""
+        return amount - discount
+
+
+    def settle(amount, discount):
+        return payable(amount, discount) - fees.fee(amount)
+
+
+    def doubled(x):
+        return x * rate()
+    ''')
+
+FEES_SOURCE = textwrap.dedent('''\
+    def fee(amount):
+        return amount // 100
+
+
+    def rate():
+        return 2
+    ''')
+
+BUG_TESTS = textwrap.dedent('''\
+    from order_settlement import calc
+
+
+    def test_payable():
+        assert calc.payable(1000, 300) == 700
+
+
+    def test_doubled():
+        assert calc.doubled(4) == 8
+    ''')
+
+
+@pytest.fixture
+def bug_target(tmp_path) -> Path:
+    """결함 하나(payable의 0원 하한 누락)가 있는 작은 대상 프로젝트. 기존 테스트는 모두 통과한다."""
+    root = tmp_path / "bug_target"
+    write(root / "pyproject.toml", '[tool.pytest.ini_options]\npythonpath = ["src"]\ntestpaths = ["tests"]\n')
+    write(root / "src" / "order_settlement" / "__init__.py", "")
+    (root / "src" / "order_settlement" / "calc.py").write_bytes(BUG_SOURCE.encode())
+    (root / "src" / "order_settlement" / "fees.py").write_bytes(FEES_SOURCE.encode())
+    write(root / "tests" / "test_calc.py", BUG_TESTS)
+    return root
+
+
+@pytest.fixture
+def bug_ws(bug_target, tmp_path):
+    return prepare_workspace("SR-BUG", source=bug_target, runs_dir=tmp_path / "runs")

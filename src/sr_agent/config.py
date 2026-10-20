@@ -41,6 +41,10 @@ SEED = 42
 
 # 코드 실행 (subprocess)
 SUBPROCESS_TIMEOUT_S = 10
+COVERAGE_TIMEOUT_S = 60  # get_coverage: 전체 테스트를 테스트별 기록으로 측정 (약 7초)
+MAX_COVERAGE_TESTS = 20
+JUDGE_TEST_TIMEOUT_S = 60  # 판정 노드의 전체 테스트 실행 (약 3초, 여유 있게)
+MAX_ANALYSIS_TRIES = 2  # 재현 테스트가 원본에서 실패하지 않으면 분석 1회 재시도
 COPY_IGNORE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".hypothesis", ".coverage", ".ruff_cache")
 SECRET_ENV_MARKERS = ("API_KEY", "SECRET", "TOKEN")  # 자식 프로세스에 넘기지 않는 환경 변수
 
