@@ -30,6 +30,7 @@ CHROMA_DIR = DATA_DIR / "chroma"
 MODELS_DIR = DATA_DIR / "models"
 MUTANTS_DIR = DATA_DIR / "mutants"  # F2-1·F2-2 결함 버전 (mutants.jsonl, summary.json)
 MUTANTS_PATH = MUTANTS_DIR / "mutants.jsonl"
+LLM_BUGS_RAW_PATH = MUTANTS_DIR / "llm_bugs_raw.jsonl"  # F2-1 LLM 결함 제안 원본 (함수 단위, 이어서 실행용)
 TICKET_DRAFTS_PATH = TICKETS_DIR / "drafts.jsonl"  # F2-3 LLM 응답 (결함 단위, 이어서 실행용)
 TICKETS_CSV_PATH = TICKETS_DIR / "tickets.csv"  # F2-4 분할까지 반영한 티켓 데이터셋
 SPLIT_PATH = TICKETS_DIR / "split.json"
@@ -50,7 +51,9 @@ MAX_DIFF_INPUTS = 50
 MAX_VALUE_CHARS = 500
 
 # 결함 주입 (F2-1, F2-2)
-MUTANTS_PER_METHOD = 5  # 함수당 채택 상한 (특정 함수 쏠림 방지)
+MUTANT_CAPS = {"ast": 4, "llm": 2}  # 주입 방식별 함수당 채택 상한 (합계 6, 특정 함수 쏠림 방지)
+LLM_BUGS_PER_FUNCTION = 4  # 함수당 요청할 결함 수 (테스트로 걸러지는 몫 포함)
+LLMINJECT_REASONING_EFFORT = "low"
 MUTGEN_WORKERS = 4  # 뮤턴트 테스트 병렬 작업본 수
 MUTANT_TRACES_KEPT = 3  # 뮤턴트마다 저장할 실패 트레이스 수
 
@@ -69,15 +72,22 @@ EMBED_MODELS = {"bge-m3": "BAAI/bge-m3", "unixcoder": "microsoft/unixcoder-base"
 EMBED_MAX_SEQ_LEN = 512
 EMBED_BATCH_SIZE = 16
 TFIDF_NGRAM_RANGE = (2, 4)  # 문자 n-gram (한국어 형태소 분석기 없이)
-RANKER_PARAMS = {
+EMBED_MODEL = "bge-m3"  # 2일차 비교로 결정 (UniXcoder 평가 Top-3 0.066)
+RANKER_PARAMS = {  # 고정값. 아래 그리드 값은 학습 분할 교차검증으로 고른다
     "objective": "rank:ndcg",
-    "n_estimators": 300,
-    "learning_rate": 0.05,
-    "max_depth": 4,
     "subsample": 0.9,
     "colsample_bytree": 0.9,
     "tree_method": "hist",
 }
+RANKER_GRID = {
+    "max_depth": [2, 4],
+    "n_estimators": [150, 400],
+    "learning_rate": [0.05],
+    "min_child_weight": [1, 10],
+}
+CV_FOLDS = 5
+# past_defects는 주 모델에서 뺀다 (처음 보는 함수에서 Top-3 0.775 → 0.295로 무너짐). 비교용(Ablation)으로만 보고
+RANKER_EXCLUDED_FEATURES = ("past_defects",)
 FAULT_MODEL_PATH = MODELS_DIR / "fault_ranker.json"
 FAULT_MODEL_META_PATH = MODELS_DIR / "fault_ranker_meta.json"
 FAULT_RESULTS_NAME = "fault_localization"  # eval/results/<이름>.{md,csv,json}

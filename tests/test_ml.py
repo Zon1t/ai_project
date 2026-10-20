@@ -11,7 +11,7 @@ from sr_agent import config
 from sr_agent.ml.corpus import Candidate, complexity, load_candidates, ticket_text
 from sr_agent.ml.features import FEATURES, Embedder, build_features, defect_counts, tfidf_scores, trace_frames
 from sr_agent.ml.metrics import breakdown, ranks, summarize
-from sr_agent.ml.train import MODEL_RANKER, evaluate
+from sr_agent.ml.train import MODEL_RANKER, MODEL_RANKER_PAST, Dataset, _cv_splits, evaluate
 
 TRACE = (
     "Traceback (most recent call last):\n"
@@ -147,24 +147,56 @@ def _synthetic_dataset():
     return cands, tickets
 
 
-def test_evaluate_pipeline_is_deterministic_and_learns_trace(tmp_path, monkeypatch):
+SMALL_GRID = {"max_depth": [2], "n_estimators": [20, 40], "learning_rate": [0.1], "min_child_weight": [1]}
+
+
+def test_evaluate_pipeline_is_deterministic_and_learns_trace(tmp_path):
     cands, tickets = _synthetic_dataset()
-    embedders = {"bge-m3": _fake_embedder("bge-m3", tmp_path), "unixcoder": _fake_embedder("unixcoder", tmp_path)}
-    result = evaluate(tickets, cands, embedders, seed=1)
-    assert set(result["results"]) == {"① TF-IDF", f"② 임베딩 ({result['embedding_model']})", MODEL_RANKER}
+    emb = _fake_embedder("bge-m3", tmp_path)
+    result = evaluate(tickets, cands, emb, seed=1, grid=SMALL_GRID)
+    assert set(result["results"]) == {"① TF-IDF", "② 임베딩 (bge-m3)", MODEL_RANKER, MODEL_RANKER_PAST}
+    assert "past_defects" not in result["feature_importance"]
     overall = result["results"][MODEL_RANKER][0]
     assert overall["n"] == 12 and overall["top1"] == 1.0  # 평가 티켓 모두 traceback에 정답
     assert result["counts"]["train_mutants"] == 36 and result["counts"]["test_tickets"] == 12
-    again = evaluate(tickets, cands, embedders, seed=1)
+    assert len(result["tuning"]) == 2 and result["params"] in [row["params"] for row in result["tuning"]]
+    for kind in ("결함 단위", "함수 단위"):
+        assert result["cv"][kind][MODEL_RANKER][0]["n"] == 48  # train+test 전체가 한 번씩 평가됨
+    again = evaluate(tickets, cands, emb, seed=1, grid=SMALL_GRID)
     again.pop("ranker"), result.pop("ranker")
     assert again == result
+
+
+def test_fold_past_defects_counts_only_fit_part(tmp_path):
+    cands, tickets = _synthetic_dataset()
+    pool = [t for t in tickets if t["split"] in ("train", "test")]
+    zeros = np.zeros((len(pool), len(cands)))
+    ds = Dataset(pool, cands, zeros, zeros)
+    assert ds.X[:, :, FEATURES.index("past_defects")].sum() == 0  # 기본 피처에는 없음
+    fit = np.array([i for i, t in enumerate(pool) if t["fixed_method"] != "m0.f0"])
+    ev = np.array([i for i, t in enumerate(pool) if t["fixed_method"] == "m0.f0"])
+    X_fit, X_eval = ds.fold(fit, ev)
+    col = FEATURES.index("past_defects")
+    assert X_eval[:, 0, col].tolist() == [0] * len(ev)  # 평가 함수의 결함은 세지 않음 (함수 단위 분할)
+    i = next(k for k, idx in enumerate(fit) if pool[idx]["fixed_method"] == "m1.f1")
+    assert X_fit[i, 1, col] == 3  # 자기 결함 1개를 뺀 나머지 3개
+
+
+def test_cv_splits_never_share_groups(tmp_path):
+    cands, tickets = _synthetic_dataset()
+    pool = [t for t in tickets if t["split"] in ("train", "test")]
+    zeros = np.zeros((len(pool), len(cands)))
+    ds = Dataset(pool, cands, zeros, zeros)
+    for key in ("mutant_id", "fixed_method"):
+        for fit, ev in _cv_splits(ds, np.arange(len(pool)), key, seed=1):
+            assert not set(ds.groups(key, fit)) & set(ds.groups(key, ev))
 
 
 def test_evaluate_rejects_unknown_method(tmp_path):
     cands, tickets = _synthetic_dataset()
     tickets[0]["fixed_method"] = "zz.unknown"
     with pytest.raises(ValueError, match="후보에 없는"):
-        evaluate(tickets, cands, {"bge-m3": _fake_embedder("bge-m3", tmp_path)})
+        evaluate(tickets, cands, _fake_embedder("bge-m3", tmp_path), grid=SMALL_GRID)
 
 
 def test_ticket_text_includes_stacktrace_only_when_present():

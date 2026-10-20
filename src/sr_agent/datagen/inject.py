@@ -2,6 +2,7 @@
 
 뮤턴트마다 임시 작업본(work/)에 결함을 심고 대상 프로젝트 테스트를 돌린다 (run_tests).
 기존 테스트가 1개 이상 실패한 버전만 채택하고, 실패 테스트·트레이스를 함께 저장한다.
+후보는 AST 뮤턴트와 LLM 주입 후보(llm_inject.py)이며, 주입 방식별 함수당 상한(config.MUTANT_CAPS)을 둔다.
 target/ 원본은 읽기만 한다. 후보 순서는 config.SEED로 섞고 함수별로 돌아가며 고른다.
 
 실행: python -m sr_agent.datagen.inject [--limit N]  (PYTHONPATH=src)
@@ -14,6 +15,7 @@ import random
 import tempfile
 import time
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
@@ -70,7 +72,7 @@ def to_record(mutant: Mutant, result: dict, original_text: str) -> dict:
     failed = result["failed"]
     return {
         "mutant_id": mutant.mutant_id,
-        "inject_type": "ast",
+        "inject_type": mutant.inject_type,
         "operator": mutant.operator,
         "description": mutant.description,
         "method": mutant.method,
@@ -93,30 +95,73 @@ def _tree_digest(root: Path) -> str:
     return hashlib.sha256(json.dumps(hash_tree(root), sort_keys=True).encode()).hexdigest()
 
 
+def _select(
+    ordered: list[Mutant],
+    cap: int,
+    run_one: Callable[[Mutant], dict],
+    executor: ThreadPoolExecutor,
+    batch_size: int,
+    accept: Callable[[Mutant, dict], bool],
+    outcomes: Counter,
+) -> None:
+    """순서대로 배치 실행하며 함수당 cap개까지 채택한다. accept가 False를 돌려주면 전체 중단."""
+    per_count: Counter = Counter()
+    pending = iter(ordered)
+    while True:
+        batch = []
+        for m in pending:
+            if per_count[m.method] < cap:
+                batch.append(m)
+            if len(batch) == batch_size:
+                break
+        if not batch:
+            return
+        for m, result in zip(batch, executor.map(run_one, batch), strict=True):
+            if per_count[m.method] >= cap:
+                outcomes["over_cap"] += 1  # 같은 배치에서 상한을 넘긴 몫 (실행은 했지만 버림)
+                continue
+            kind = classify(result)
+            outcomes[kind] += 1
+            if kind == "killed":
+                per_count[m.method] += 1
+                if not accept(m, result):
+                    return
+
+
 def inject(
     target_root: Path | None = None,
     out_dir: Path | None = None,
     limit: int | None = None,
-    per_method: int = config.MUTANTS_PER_METHOD,
+    caps: dict[str, int] | None = None,
+    llm_candidates: list[Mutant] | None = None,
     workers: int = config.MUTGEN_WORKERS,
     seed: int = config.SEED,
     timeout: float | None = None,
 ) -> dict:
     """결함 버전을 만들어 out_dir에 mutants.jsonl과 summary.json으로 저장하고 요약을 돌려준다.
 
-    limit: 채택 개수 상한 (None이면 후보 전체 검사). per_method: 함수당 채택 상한.
+    limit: 채택 개수 상한 (None이면 후보 전체 검사). caps: 주입 방식별 함수당 상한.
+    llm_candidates: LLM 주입 후보 (None이면 저장된 LLM 응답에서 만든다. 없으면 AST만).
     """
     target_root = Path(target_root or config.TARGET_ROOT)
     out_dir = Path(out_dir or config.MUTANTS_DIR)
+    caps = caps or config.MUTANT_CAPS
     started = time.monotonic()
     before = hash_tree(target_root)
 
-    mutants = list_mutants(target_root)
-    ordered = order_for_sampling(mutants, seed)
-    texts = {f: read_source(target_root / f) for f in {m.file for m in mutants}}
+    if llm_candidates is None:
+        from sr_agent.datagen.llm_inject import load_candidates
+
+        llm_candidates, _ = load_candidates(target_root)
+    sources = {"ast": list_mutants(target_root), "llm": llm_candidates}
+    all_candidates = [m for ms in sources.values() for m in ms]
+    texts = {f: read_source(target_root / f) for f in {m.file for m in all_candidates}}
     accepted: list[dict] = []
     outcomes: Counter = Counter()
-    per_count: Counter = Counter()
+
+    def accept(m: Mutant, result: dict) -> bool:
+        accepted.append(to_record(m, result, texts[m.file]))
+        return limit is None or len(accepted) < limit
 
     with tempfile.TemporaryDirectory(prefix="mutgen-") as tmp:
         pool: Queue[Workspace] = Queue()
@@ -136,43 +181,33 @@ def inject(
         if "error" in baseline or baseline["failed"]:
             return {"error": "원본 테스트가 통과하지 않음", "baseline": baseline}
 
-        pending = iter(ordered)
         with ThreadPoolExecutor(workers) as executor:
-            while limit is None or len(accepted) < limit:
-                batch = []
-                for m in pending:
-                    if per_count[m.method] < per_method:
-                        batch.append(m)
-                    if len(batch) == workers * 2:
-                        break
-                if not batch:
+            for inject_type, candidates in sources.items():
+                if limit is not None and len(accepted) >= limit:
                     break
-                for m, result in zip(batch, executor.map(run_one, batch), strict=True):
-                    if (limit is not None and len(accepted) >= limit) or per_count[m.method] >= per_method:
-                        outcomes["over_cap"] += 1  # 같은 배치에서 상한을 넘긴 몫 (실행은 했지만 버림)
-                        continue
-                    kind = classify(result)
-                    outcomes[kind] += 1
-                    if kind == "killed":
-                        accepted.append(to_record(m, result, texts[m.file]))
-                        per_count[m.method] += 1
+                _select(order_for_sampling(candidates, seed), caps.get(inject_type, 0), run_one, executor,
+                        workers * 2, accept, outcomes)
 
-    all_methods = sorted({m.method for m in mutants})
+    all_methods = sorted({m.method for m in all_candidates})
     covered = sorted({r["method"] for r in accepted})
+    per_method = Counter(r["method"] for r in accepted)
     summary = {
         "seed": seed,
         "limit": limit,
-        "per_method": per_method,
+        "caps": caps,
         "target_digest": _tree_digest(target_root),
         "target_unchanged": compare_hashes(before, hash_tree(target_root))["unchanged"],
-        "candidates": len(mutants),
-        "candidates_by_operator": dict(sorted(Counter(m.operator for m in mutants).items())),
+        "candidates": len(all_candidates),
+        "candidates_by_inject_type": {k: len(v) for k, v in sources.items()},
+        "candidates_by_operator": dict(sorted(Counter(m.operator for m in all_candidates).items())),
         "evaluated": sum(outcomes.values()),
         "outcomes": dict(sorted(outcomes.items())),
         "accepted": len(accepted),
+        "accepted_by_inject_type": dict(sorted(Counter(r["inject_type"] for r in accepted).items())),
         "accepted_by_operator": dict(sorted(Counter(r["operator"] for r in accepted).items())),
         "methods_with_candidates": len(all_methods),
         "methods_covered": len(covered),
+        "mutants_per_method": {str(k): v for k, v in sorted(Counter(per_method.values()).items())},  # 결함 수: 함수 수
         "methods_uncovered": [m for m in all_methods if m not in covered] if limit is None else None,
         "elapsed_s": round(time.monotonic() - started, 1),
     }
@@ -188,13 +223,12 @@ def inject(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AST 뮤테이션으로 결함 버전 생성 (PRD F2-1, F2-2)")
+    parser = argparse.ArgumentParser(description="결함 버전 생성·선별 (PRD F2-1, F2-2)")
     parser.add_argument("--limit", type=int, default=None, help="채택 개수 상한 (기본: 전체)")
-    parser.add_argument("--per-method", type=int, default=config.MUTANTS_PER_METHOD)
     parser.add_argument("--workers", type=int, default=config.MUTGEN_WORKERS)
     parser.add_argument("--out-dir", type=Path, default=config.MUTANTS_DIR)
     args = parser.parse_args()
-    summary = inject(out_dir=args.out_dir, limit=args.limit, per_method=args.per_method, workers=args.workers)
+    summary = inject(out_dir=args.out_dir, limit=args.limit, workers=args.workers)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if "error" not in summary:
         print(f"저장: {args.out_dir / MUTANTS_FILENAME}")

@@ -25,7 +25,13 @@ OPERATORS = {
     "CRP": "숫자·불리언 상수 교체",
     "MMR": "max/min 교체 (상·하한)",
     "SDL": "문장 삭제 (누락)",
+    "ARG": "호출 인자 순서 교체",
+    "SCR": "상태·코드 문자열 교체",
+    "RSD": "raise·가드 return 삭제 (검증 누락)",
+    "MCR": "감싼 호출 제거 (절사·변환 누락)",
 }
+_CODE_STRING = re.compile(r"^[A-Z][A-Z0-9_]+$")
+_UNWRAP_BUILTINS = frozenset({"int", "float", "round", "abs", "str", "sorted", "list", "set", "tuple"})
 
 _CMP_SWAP = {
     ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt,
@@ -69,6 +75,7 @@ class Mutant:
     end: int
     original: str
     replacement: str
+    inject_type: str = "ast"  # ast(1차 뮤턴트) | llm(LLM 주입) | ast2(2차 뮤턴트)
 
     def apply(self, text: str) -> str:
         """원본 텍스트에 이 뮤테이션을 적용한 텍스트."""
@@ -320,8 +327,84 @@ def _assigned_before_fn(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Callabl
     return assigned_before
 
 
-def _node_candidates(node: ast.AST, idx: int, src: _Source,
-                     assigned_before: Callable[[str, int], bool]) -> Iterator[_Candidate]:
+@dataclass(frozen=True)
+class _Context:
+    """함수 하나를 변이할 때 필요한 주변 정보."""
+
+    assigned_before: Callable[[str, int], bool]
+    guard_returns: frozenset[int]  # if 블록 안의 return (id)
+    codes: tuple[str, ...]  # 같은 모듈의 상태·코드 문자열 상수 (SCR 교체 후보)
+    unwrap_names: frozenset[str]  # 감싼 호출을 벗길 수 있는 함수 이름 (MCR)
+
+
+def _context(func: ast.FunctionDef | ast.AsyncFunctionDef, codes: tuple[str, ...],
+             unwrap_names: frozenset[str]) -> _Context:
+    guards = frozenset(
+        id(s) for n in ast.walk(func) if isinstance(n, ast.If)
+        for s in n.body + n.orelse if isinstance(s, ast.Return)
+    )
+    return _Context(_assigned_before_fn(func), guards, codes, unwrap_names)
+
+
+def _swap_args_candidates(node: ast.Call, idx: int, src: _Source) -> Iterator[_Candidate]:
+    """앞 두 위치 인자 순서 바꾸기. 순서가 상관없는 max·min은 뺀다."""
+    if len(node.args) < 2 or any(isinstance(a, ast.Starred) for a in node.args[:2]):
+        return
+    if isinstance(node.func, ast.Name) and node.func.id in _MINMAX:
+        return
+    a, b = node.args[0], node.args[1]
+    seg_a, seg_b = src.segment(a), src.segment(b)
+    if seg_a == seg_b:
+        return
+    gap = src.text[src.end(a):src.start(b)]
+
+    def edit(n: ast.AST, parents: _Parents) -> None:
+        n.args[0], n.args[1] = n.args[1], n.args[0]
+    yield _Candidate("ARG", f"`{_call_name(node)}` 인자 1·2 순서 교체", idx, src.start(a), src.end(b),
+                     seg_b + gap + seg_a, edit)
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    return func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else "?"
+
+
+def _unwrap_candidates(node: ast.Call, idx: int, src: _Source, ctx: _Context) -> Iterator[_Candidate]:
+    """인자 하나짜리 호출을 벗겨 인자만 남긴다 (절사·변환 누락)."""
+    if len(node.args) != 1 or node.keywords or isinstance(node.args[0], ast.Starred):
+        return
+    name = _call_name(node)
+    if name not in ctx.unwrap_names:
+        return
+
+    def edit(n: ast.AST, parents: _Parents) -> None:
+        _replace_node(parents, n, n.args[0])
+    yield _Candidate("MCR", f"`{name}(...)` 호출 제거", idx, src.start(node), src.end(node),
+                     src.segment(node.args[0]), edit)
+
+
+def _code_string_candidates(node: ast.Constant, idx: int, src: _Source, ctx: _Context) -> Iterator[_Candidate]:
+    """상태·코드 문자열을 같은 모듈의 다른 코드로 바꾼다 (예: "PAID" → "SHIPPED")."""
+    if not (isinstance(node.value, str) and _CODE_STRING.match(node.value)) or len(ctx.codes) < 2:
+        return
+    i = ctx.codes.index(node.value)
+    new = ctx.codes[(i + 1) % len(ctx.codes)]
+    seg = src.segment(node)
+    quote = seg[0] if seg[:1] in ("'", '"') else '"'
+    yield _Candidate("SCR", f"`{node.value}` → `{new}`", idx, src.start(node), src.end(node),
+                     f"{quote}{new}{quote}", _set_attr("value", lambda: new))
+
+
+def _guard_delete_candidates(node: ast.stmt, idx: int, src: _Source, ctx: _Context) -> Iterator[_Candidate]:
+    """raise와 if 안의 return을 지운다 (검증·가드 누락)."""
+    if isinstance(node, ast.Raise) or id(node) in ctx.guard_returns:
+        def edit(n: ast.AST, parents: _Parents) -> None:
+            _replace_node(parents, n, ast.Pass())
+        first_line = src.segment(node).split("\n")[0].strip()
+        yield _Candidate("RSD", f"`{first_line}` 삭제", idx, src.start(node), src.end(node), "pass", edit)
+
+
+def _node_candidates(node: ast.AST, idx: int, src: _Source, ctx: _Context) -> Iterator[_Candidate]:
     if isinstance(node, ast.Compare):
         yield from _cmp_candidates(node, idx, src)
     elif isinstance(node, ast.BinOp | ast.AugAssign):
@@ -334,12 +417,16 @@ def _node_candidates(node: ast.AST, idx: int, src: _Source,
         yield from _negate_test_candidates(node, idx, src)
     elif isinstance(node, ast.Constant):
         yield from _const_candidates(node, idx, src)
-    elif isinstance(node, ast.Call):
+        yield from _code_string_candidates(node, idx, src, ctx)
+    elif isinstance(node, ast.Call) and not _is_log_call(node):
         yield from _minmax_candidates(node, idx, src)
+        yield from _swap_args_candidates(node, idx, src)
+        yield from _unwrap_candidates(node, idx, src, ctx)
     if isinstance(node, ast.If):
         yield from _negate_test_candidates(node, idx, src)
     if isinstance(node, ast.stmt):
-        yield from _stmt_delete_candidates(node, idx, src, assigned_before)
+        yield from _stmt_delete_candidates(node, idx, src, ctx.assigned_before)
+        yield from _guard_delete_candidates(node, idx, src, ctx)
 
 
 def _verified(tree: ast.Module, cand: _Candidate, mutated: str) -> bool:
@@ -359,17 +446,31 @@ def _mutant_id(file: str, start: int, end: int, replacement: str) -> str:
     return "MUT-" + digest[:8]
 
 
-def mutate_source(text: str, module: str, file: str) -> list[Mutant]:
-    """모듈 소스 하나에서 검증을 통과한 뮤턴트를 모두 만든다 (위치 순)."""
+def _code_strings(tree: ast.Module, functions: list) -> tuple[str, ...]:
+    """함수 본문에 나오는 상태·코드 문자열 상수 (정렬, 중복 제거)."""
+    return tuple(sorted({
+        n.value for _, func in functions for n in _body_nodes(func)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and _CODE_STRING.match(n.value)
+    }))
+
+
+def mutate_source(text: str, module: str, file: str, project_functions: frozenset[str] = frozenset()) -> list[Mutant]:
+    """모듈 소스 하나에서 검증을 통과한 뮤턴트를 모두 만든다 (위치 순).
+
+    project_functions: MCR로 호출을 벗길 수 있는 프로젝트 함수 이름 (기본: 같은 모듈 함수만).
+    """
     tree = ast.parse(text)
     src = _Source(text)
     file_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
     index = {id(n): i for i, n in enumerate(ast.walk(tree))}
+    functions = list(_functions(tree, module))
+    codes = _code_strings(tree, functions)
+    unwrap = frozenset(_UNWRAP_BUILTINS | project_functions | {f.name for _, f in functions})
     mutants: dict[str, Mutant] = {}
-    for method, func in _functions(tree, module):
-        assigned_before = _assigned_before_fn(func)
+    for method, func in functions:
+        ctx = _context(func, codes, unwrap)
         for node in _body_nodes(func):
-            for cand in _node_candidates(node, index[id(node)], src, assigned_before):
+            for cand in _node_candidates(node, index[id(node)], src, ctx):
                 mutated = text[:cand.start] + cand.replacement + text[cand.end:]
                 if not _verified(tree, cand, mutated):
                     continue
@@ -397,10 +498,14 @@ def read_source(path: Path) -> str:
 def list_mutants(target_root: Path | None = None) -> list[Mutant]:
     """대상 프로젝트 전체의 뮤턴트 후보 (파일·위치 순)."""
     root = Path(target_root or config.TARGET_ROOT)
+    files = [(p, read_source(p)) for p in package_files(root)]
+    project_functions = frozenset(
+        f.name for p, text in files for _, f in _functions(ast.parse(text), p.stem)
+    )
     mutants = []
-    for path in package_files(root):
+    for path, text in files:
         rel = path.relative_to(root).as_posix()
-        mutants.extend(mutate_source(read_source(path), path.stem, rel))
+        mutants.extend(mutate_source(text, path.stem, rel, project_functions))
     return mutants
 
 

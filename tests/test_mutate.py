@@ -6,7 +6,7 @@ import textwrap
 import pytest
 
 from sr_agent import config
-from sr_agent.datagen.mutate import apply_mutant, list_mutants, mutate_source, read_source
+from sr_agent.datagen.mutate import OPERATORS, apply_mutant, list_mutants, mutate_source, read_source
 
 
 def _mutants(source: str, operator: str | None = None):
@@ -36,6 +36,11 @@ def _applied(source: str, operator: str) -> set[str]:
     ("def f():\n    return True\n", "CRP", {"return False"}),
     ("def f(a):\n    return max(0, a)\n", "MMR", {"return min(0, a)"}),
     ("def f(d):\n    d['k'] = 1\n    return d\n", "SDL", {"pass"}),
+    ("def f(a, b):\n    return g(a, b)\n", "ARG", {"return g(b, a)"}),
+    ("def f(o):\n    if o == 'PAID':\n        return 'SHIPPED'\n", "SCR", {"if o == 'SHIPPED':", "return 'PAID'"}),
+    ("def f(a):\n    if a < 0:\n        raise ValueError(a)\n    return a\n", "RSD", {"pass"}),
+    ("def f(a):\n    if a:\n        return 0\n    return 1\n", "RSD", {"pass"}),
+    ("def f(a):\n    return round_won(a * 2)\n\n\ndef round_won(x):\n    return x\n", "MCR", {"return a * 2"}),
 ])
 def test_operator_replaces_only_the_token(source, operator, expected):
     assert expected <= _applied(source, operator)
@@ -85,6 +90,17 @@ def test_sdl_keeps_first_assignment_but_deletes_reassignment():
     assert deleted == ["x = x * 2"]
 
 
+def test_new_operators_skip_unsafe_cases():
+    # max·min 인자 교체는 의미 없음, 같은 인자 교체도 의미 없음
+    assert _mutants("def f(a, b):\n    return max(a, b) + g(a, a)\n", "ARG") == []
+    # 프로젝트 함수·변환 내장 함수가 아니면 호출을 벗기지 않음
+    assert _mutants("def f(a):\n    return len(a)\n", "MCR") == []
+    # 소문자 문자열은 상태 코드로 보지 않고, 후보가 1개뿐이면 바꿀 대상이 없음
+    assert _mutants("def f(o):\n    return o['status'] == 'PAID'\n", "SCR") == []
+    # if 밖의 return은 지우지 않음
+    assert _mutants("def f(a):\n    return a\n", "RSD") == []
+
+
 def test_string_formatting_is_not_arithmetic():
     assert _mutants('def f(a):\n    return "id=%s" % a + "!"\n', "AOR") == []
 
@@ -102,7 +118,7 @@ def test_target_project_mutants_are_valid():
     ms = list_mutants()
     assert len(ms) >= 300
     assert len({m.method for m in ms}) >= 70
-    assert {m.operator for m in ms} == {"ROR", "AOR", "LCR", "NEG", "CRP", "MMR", "SDL"}
+    assert {m.operator for m in ms} == set(OPERATORS)
     texts = {}
     for m in ms:
         text = texts.setdefault(m.file, read_source(config.TARGET_ROOT / m.file))

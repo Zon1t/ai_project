@@ -75,10 +75,21 @@ def trace_frames(stacktrace: str) -> list[tuple[str, str]]:
     return _FRAME.findall(stacktrace or "")
 
 
-def defect_counts(train_tickets: list[dict]) -> Counter:
-    """학습 분할 결함의 함수별 개수 (결함 단위, 티켓 2건이어도 1개)."""
-    mutants = {t["mutant_id"]: t["fixed_method"] for t in train_tickets if t["split"] == "train"}
+def defect_counts(tickets: list[dict], split: str | None = "train") -> Counter:
+    """결함의 함수별 개수 (결함 단위, 티켓 2건이어도 1개). split=None이면 받은 티켓 전부를 센다."""
+    mutants = {t["mutant_id"]: t["fixed_method"] for t in tickets if split is None or t["split"] == split}
     return Counter(mutants.values())
+
+
+def set_past_defects(X: np.ndarray, tickets: list[dict], candidates: list[Candidate], counts: Counter,
+                     counted: set[str]) -> None:
+    """past_defects 열을 채운다. counts에 들어간 결함(counted)의 티켓은 자기 결함을 빼고 센다."""
+    col = FEATURES.index("past_defects")
+    X[:, :, col] = np.array([counts.get(c.method, 0) for c in candidates], dtype=np.float32)
+    index = {c.method: j for j, c in enumerate(candidates)}
+    for i, t in enumerate(tickets):
+        if t["mutant_id"] in counted:
+            X[i, index[t["fixed_method"]], col] -= 1
 
 
 def build_features(
@@ -87,8 +98,12 @@ def build_features(
     tfidf: np.ndarray,
     emb: np.ndarray,
     counts: Counter,
+    counted: set[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """피처 [티켓, 후보, FEATURES]와 정답 라벨 [티켓, 후보]."""
+    """피처 [티켓, 후보, FEATURES]와 정답 라벨 [티켓, 후보].
+
+    counted: counts를 계산할 때 들어간 결함 ID (기본: 학습 분할 티켓의 결함).
+    """
     n_t, n_c = len(tickets), len(candidates)
     X = np.zeros((n_t, n_c, len(FEATURES)), dtype=np.float32)
     y = np.zeros((n_t, n_c), dtype=np.int32)
@@ -96,13 +111,12 @@ def build_features(
     X[:, :, FEATURES.index("emb_sim")] = emb
     X[:, :, FEATURES.index("loc")] = [c.loc for c in candidates]
     X[:, :, FEATURES.index("complexity")] = [c.complexity for c in candidates]
-    past = np.array([counts.get(c.method, 0) for c in candidates], dtype=np.float32)
+    if counted is None:
+        counted = {t["mutant_id"] for t in tickets if t["split"] == "train"}
+    set_past_defects(X, tickets, candidates, counts, counted)
     methods = [c.method for c in candidates]
     for i, t in enumerate(tickets):
         y[i, methods.index(t["fixed_method"])] = 1
-        X[i, :, FEATURES.index("past_defects")] = past
-        if t["split"] == "train":  # 자기 결함은 빼고 센다
-            X[i, methods.index(t["fixed_method"]), FEATURES.index("past_defects")] -= 1
         frames = trace_frames(t.get("stacktrace", ""))
         if frames:
             in_trace = {f"{m}.{f}" for m, f in frames}

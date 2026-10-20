@@ -2,12 +2,14 @@
 
 import json
 import textwrap
+from collections import Counter
 
 import pytest
 
 from sr_agent.datagen import inject as inject_mod
 from sr_agent.datagen.inject import classify, inject, order_for_sampling
-from sr_agent.datagen.mutate import list_mutants
+from sr_agent.datagen.llm_inject import function_spans, to_mutants
+from sr_agent.datagen.mutate import list_mutants, read_source
 from sr_agent.tools.workspace import hash_tree
 from tests.conftest import write
 
@@ -77,7 +79,7 @@ def test_order_for_sampling_spreads_methods_and_is_deterministic(loop_target):
 def test_inject_keeps_only_failing_mutants(loop_target, tmp_path):
     before = hash_tree(loop_target)
     out = tmp_path / "out"
-    summary = inject(target_root=loop_target, out_dir=out, workers=2, timeout=3)
+    summary = inject(target_root=loop_target, out_dir=out, workers=2, timeout=3, llm_candidates=[])
 
     assert summary["target_unchanged"] and hash_tree(loop_target) == before
     assert summary["outcomes"]["killed"] == summary["accepted"] > 0
@@ -95,14 +97,25 @@ def test_inject_keeps_only_failing_mutants(loop_target, tmp_path):
     assert "-    return a + b\r\n+    return a - b" in add["diff"]  # write()는 CRLF로 쓴다
 
 
-def test_inject_respects_per_method_cap_and_limit(loop_target, tmp_path, monkeypatch):
+def _llm_bug(root):
+    """loop.add에 대한 LLM 주입 후보 하나."""
+    text = read_source(root / "src" / "order_settlement" / "loop.py")
+    span = next(s for s in function_spans(root) if s.method == "loop.add")
+    (m,), _ = to_mutants(span, text, [{"bug_type": "계산", "description": "덧셈 대신 곱셈",
+                                       "original": "return a + b", "mutated": "return a * b"}], set())
+    return m
+
+
+def test_inject_respects_caps_and_limit(loop_target, tmp_path, monkeypatch):
     killed = {"passed": 0, "failed": [{"test": "tests/test_loop.py::test_x", "trace": "E"}]}
     monkeypatch.setattr(inject_mod, "evaluate_mutant", lambda ws, m, text, timeout=None: killed)
 
-    summary = inject(target_root=loop_target, out_dir=tmp_path / "a", per_method=1, workers=2)
+    summary = inject(target_root=loop_target, out_dir=tmp_path / "a", caps={"ast": 1, "llm": 1},
+                     llm_candidates=[_llm_bug(loop_target)], workers=2)
     records = _read_jsonl(tmp_path / "a" / "mutants.jsonl")
-    assert len(records) == summary["accepted"] == 3
-    assert len({r["method"] for r in records}) == 3
+    assert len(records) == summary["accepted"] == 4  # AST 함수 3개 × 1 + LLM 1
+    assert Counter((r["method"], r["inject_type"]) for r in records).most_common(1)[0][1] == 1
+    assert summary["accepted_by_inject_type"] == {"ast": 3, "llm": 1}
 
-    summary = inject(target_root=loop_target, out_dir=tmp_path / "b", limit=2, workers=2)
+    summary = inject(target_root=loop_target, out_dir=tmp_path / "b", limit=2, workers=2, llm_candidates=[])
     assert summary["accepted"] == 2 and summary["methods_uncovered"] is None

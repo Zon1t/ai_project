@@ -1,42 +1,67 @@
 {
   "seed": 42,
   "limit": null,
-  "per_method": 5,
-  "target_digest": "6c420fd7e86a455161535c6366f106a8311d91b90c1973f95070b5529f61474a",
-  "target_unchanged": true,
-  "candidates": 348,
-  "candidates_by_operator": {
-    "AOR": 52,
-    "CRP": 92,
-    "LCR": 14,
-    "MMR": 2,
-    "NEG": 77,
-    "ROR": 76,
-    "SDL": 35
+  "caps": {
+    "ast": 4,
+    "llm": 2
   },
-  "evaluated": 244,
+  "target_digest": "40b54bfee28f2a5801582875be6b4af3843c54ab023ce4f101c88cad681d1940",
+  "target_unchanged": true,
+  "candidates": 2914,
+  "candidates_by_inject_type": {
+    "ast": 1986,
+    "llm": 928
+  },
+  "candidates_by_operator": {
+    "AOR": 223,
+    "ARG": 208,
+    "CRP": 327,
+    "LCR": 63,
+    "LLM": 928,
+    "MCR": 92,
+    "MMR": 18,
+    "NEG": 297,
+    "ROR": 296,
+    "RSD": 214,
+    "SCR": 134,
+    "SDL": 114
+  },
+  "evaluated": 1519,
   "outcomes": {
-    "killed": 220,
-    "survived": 17,
+    "killed": 1341,
+    "over_cap": 6,
+    "survived": 165,
     "timeout": 7
   },
-  "accepted": 220,
-  "accepted_by_operator": {
-    "AOR": 34,
-    "CRP": 49,
-    "LCR": 11,
-    "MMR": 1,
-    "NEG": 53,
-    "ROR": 53,
-    "SDL": 19
+  "accepted": 1341,
+  "accepted_by_inject_type": {
+    "ast": 853,
+    "llm": 488
   },
-  "methods_with_candidates": 80,
-  "methods_covered": 76,
-  "methods_uncovered": [
-    "date_utils.is_holiday",
-    "db.execute",
-    "discount.calc_grade_discount",
-    "report.format_report_line"
-  ],
-  "elapsed_s": 187.5
+  "accepted_by_operator": {
+    "AOR": 95,
+    "ARG": 134,
+    "CRP": 123,
+    "LCR": 19,
+    "LLM": 488,
+    "MCR": 47,
+    "MMR": 9,
+    "NEG": 115,
+    "ROR": 131,
+    "RSD": 91,
+    "SCR": 43,
+    "SDL": 46
+  },
+  "methods_with_candidates": 268,
+  "methods_covered": 268,
+  "mutants_per_method": {
+    "1": 5,
+    "2": 14,
+    "3": 37,
+    "4": 21,
+    "5": 33,
+    "6": 158
+  },
+  "methods_uncovered": [],
+  "elapsed_s": 1353.5
 }

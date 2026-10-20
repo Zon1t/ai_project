@@ -10,7 +10,7 @@
 | 영역 | 사용 |
 |---|---|
 | 언어 | Python 3.12 (에이전트·모델·화면·대상 프로젝트 실행) |
-| LLM | OpenAI `gpt-5`(에이전트), `gpt-6-luna`(티켓 문장 대량 생성), OpenAI Python SDK (`openai`) Responses API + function calling |
+| LLM | OpenAI `gpt-5`(에이전트), `gpt-6-luna`(티켓 문장·LLM 결함 주입 등 데이터 대량 생성), OpenAI Python SDK (`openai`) Responses API + function calling |
 | ML/DL | XGBoost, scikit-learn, sentence-transformers, SHAP |
 | 테스트·공격 | pytest, coverage.py, Hypothesis |
 | 결함 주입·검사 | AST 뮤테이션 스크립트(직접 작성, mutmut은 Windows 미지원으로 제외), ruff, bandit |
@@ -29,7 +29,7 @@ project/
 ├── docs/                    # 단계별 정리 문서 (step1.md 등)
 ├── target/                  # 가상 레거시 대상 프로젝트 (수정 대상, 아래 규칙 참고)
 │   └── order_settlement/
-│       ├── src/order_settlement/   # 주문·할인·결제·정산·고객 모듈
+│       ├── src/order_settlement/   # 주문·할인·결제·정산·고객·배송·재고·포인트 등 20개 모듈
 │       └── tests/
 ├── data/
 │   ├── tickets/             # 결함 티켓 CSV, 분할 정보
@@ -112,7 +112,7 @@ API 키는 프로젝트 루트 `.env`의 `OPENAI_API_KEY`에 둔다. 진입점�
 
 ### OpenAI API 사용 규칙
 
-- 모델은 `config.MODEL = "gpt-5"`(분석·수정·공격 에이전트), `config.MODEL_BULK = "gpt-6-luna"`(F2-3 티켓 문장 생성 전용). 사용자가 바꾸라고 하기 전에는 다른 모델로 바꾸지 않는다. 3일차 S1 첫 실행 때 두 모델을 한 번 비교해 보고한다.
+- 모델은 `config.MODEL = "gpt-5"`(분석·수정·공격 에이전트), `config.MODEL_BULK = "gpt-6-luna"`(F2-1 LLM 결함 주입·F2-3 티켓 문장 생성 등 데이터 대량 생성 전용). 사용자가 바꾸라고 하기 전에는 다른 모델로 바꾸지 않는다. 3일차 S1 첫 실행 때 두 모델을 한 번 비교해 보고한다.
 - 클라이언트는 인자 없이 `openai.OpenAI()`로 만든다 (`load_dotenv()` 후 환경 변수에서 키를 읽음). 타임아웃·재시도(`timeout`, `max_retries`)는 `config`에서 가져온다.
 - Responses API(`client.responses.create`)를 기준으로 쓴다.
 - 에이전트 루프는 직접 짠다 (OpenAI Agents SDK·LangChain 등 프레임워크 사용 안 함). 응답의 `function_call` 항목마다 도구를 실행하고 `function_call_output`(같은 `call_id`)으로 돌려준다. 루프 반복 횟수 상한은 `config`에 둔다. 실행 전 승인이나 로깅이 필요하면 도구 함수 안에서 처리한다.
