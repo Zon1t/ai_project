@@ -16,8 +16,9 @@ from sr_agent.tools.workspace import Workspace
 
 # PRD 7.3 "사용 에이전트" 열. 아직 구현하지 않은 도구는 등록되는 대로 쓰인다.
 AGENT_TOOLS: dict[str, tuple[str, ...]] = {
+    # search_rules: 재현 테스트의 기대값을 업무 규칙으로 정하려고 분석에도 허용 (PRD v0.7)
     "analysis": ("predict_fault_location", "search_history", "get_callers", "get_coverage", "read_method",
-                 "write_repro_test", "run_tests"),
+                 "search_rules", "write_repro_test", "run_tests"),
     "fix": ("search_rules", "read_method", "apply_patch", "run_tests", "check_deprecated", "check_security",
             "check_style"),
     # read_method 허용은 PRD 12장 기본안 (경계값 설계에 코드가 필요)
