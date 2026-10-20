@@ -112,3 +112,12 @@ LLM_TIMEOUT_S = 120
 LLM_MAX_RETRIES = 3
 MAX_OUTPUT_TOKENS = 16000  # 추론 토큰 포함
 MAX_PATCH_RETRIES = 3
+
+# 에이전트 공통 (F5, F7-1)
+MODEL_FALLBACK: str | None = None  # 기본 모델 호출이 서버 오류로 실패할 때 쓸 모델. 사용자 결정 전까지 끔
+AGENT_REASONING_EFFORT = {"analysis": "high", "fix": "high", "attack": "medium"}
+AGENT_MAX_TURNS = 20  # 에이전트 루프 반복(LLM 호출) 상한
+TICKET_TOKEN_LIMIT = 500_000  # 티켓당 토큰 상한 (입력+출력, 모든 에이전트 합계)
+TOOL_OUTPUT_CHARS = 12000  # 도구 결과를 모델에 돌려줄 때 길이 상한
+LOG_SUMMARY_CHARS = 300  # 실행 로그의 입력·출력 요약 길이
+SEARCH_RULES_TOP_K = {"defect": 5, "standardize": 8, "security": 5}  # 수정 유형별 규칙 검색 개수

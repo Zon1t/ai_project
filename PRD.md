@@ -261,6 +261,8 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 > `write_repro_test`는 기획서 도구 목록에 없던 항목으로, 재현 테스트 작성 단계를 도구로 분리하기 위해 추가했다. `check_style`은 v0.3에서 S2 확장과 함께 추가했다.
 >
 > **구현 규약 (v0.2)**
+> - 에이전트 루프는 직접 짠다 (`agents/loop.py`): `responses.parse` + strict 함수 도구, `function_call` → 같은 `call_id`의 `function_call_output`, 반복 상한, 티켓당 토큰 상한, 응답 status·거부 확인. 허용 목록 밖 도구 호출과 잘못된 인자는 실행하지 않고 오류를 결과로 돌려준다. strict 모드는 모든 인자를 required로 요구하므로 선택 인자(`top_k`, `tests`)는 null 허용 타입으로 노출하고 null이면 기본값을 쓴다.
+> - fallback은 클라이언트 측에서 한다 (OpenAI에는 서버 측 fallback 없음). SDK 재시도 후에도 5xx·연결 오류·404·429이면 `MODEL_FALLBACK`으로 다시 요청하며 실행 로그에 남긴다. 기본은 꺼짐.
 > - 작업본을 다루는 도구는 Python 함수에서 첫 인자로 `ws`(현재 티켓 Workspace)를 받는다. LLM에 노출할 때는 `ws`를 바인딩해 위 표의 인자만 보인다. 테스트용 `timeout` 인자도 노출하지 않는다.
 > - `run_diff`·`property_attack`의 각 입력은 위치 인자 리스트 또는 `{"args": [...], "kwargs": {...}}`. JSON으로 표현할 수 없는 값은 `{"$datetime": ISO}`, `{"$date": "YYYY-MM-DD"}`, `{"$db": {테이블: [행, ...]}}`(입력마다 새 인메모리 DB)로 쓴다.
 > - `run_diff`의 `original`·`patched`는 `{"ok": true, "value": ...}` 또는 `{"ok": false, "exception": "타입: 메시지"}`.
@@ -356,7 +358,8 @@ SI·ITO 운영 조직의 개발자는 변경 요청(SR)을 받아 운영 중인 
 - [ ] S2 "출력 완전 동일" 비교 규칙: naive/aware datetime 차이, pytz·zoneinfo의 DST 처리 차이, 현재 시각 고정 방법 (기본안: 비교 전 UTC aware로 정규화, 시각은 `unittest.mock`으로 고정)
 - [ ] 결함 수정 판정의 "결함 영역 밖" 입력 범위를 코드로 정의하는 방법 (기본안: 재현 테스트 입력과 겹치지 않는 영역을 티켓 데이터에 미리 정의, LLM이 정하지 않음)
 - [ ] 코드 표준화·보안 유형에서 분석 에이전트 단계 생략 여부 (기본안: 생략, 수정 에이전트부터 시작)
-- [ ] 공격 에이전트에 `read_method` 허용 여부 (기본안: 허용, 경계값 설계에 코드가 필요)
+- [x] 공격 에이전트에 `read_method` 허용 → 허용 (경계값 설계에 코드가 필요)
+- [ ] fallback 모델 지정 여부 (기본안: 지정하지 않음. `config.MODEL_FALLBACK = None`, 기본 모델 장애 시 티켓을 사람 검토로)
 - [ ] 재시도 기준: 트리거는 판정 실패, "최대 3회"는 첫 시도 이후 재시도 3회 = 공격·판정 최대 4라운드 (기본안). E2E에서 통과한 재시도 차수를 기록해 4회 상향 여부 결정
 - [x] 과거 결함 수 피처 → 주 모델에서 제외, 비교용으로만 보고 (6장)
 - [ ] KPI "불완전 패치 10건"의 작성 방법과 일정
