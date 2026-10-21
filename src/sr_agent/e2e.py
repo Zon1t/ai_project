@@ -15,7 +15,6 @@ import ast
 import csv
 import json
 import re
-import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,7 +25,7 @@ from sr_agent.datagen.tickets import load_jsonl
 from sr_agent.ml.corpus import load_tickets
 from sr_agent.tools.code import find_function
 from sr_agent.tools.execution import run_tests
-from sr_agent.tools.workspace import Workspace, prepare_workspace
+from sr_agent.tools.workspace import Workspace, prepare_workspace, remove_tree
 from sr_agent.workflow.graph import FINAL, RunOptions, run_ticket
 from sr_agent.workflow.judge import hidden_tests_check
 from sr_agent.workflow.state import JudgeSpec, ReferenceImpl, Ticket, TicketState
@@ -208,7 +207,7 @@ def run_case(ticket: Ticket, mutant: dict, runs_dir: Path, client, options: RunO
     if done is not None and done.status in FINAL and not restart:
         return case_result(done, mutant, runs_dir, None, hidden_result(done, ticket, mutant, runs_dir))
     if restart and (runs_dir / ticket.ticket_id).exists():
-        shutil.rmtree(runs_dir / ticket.ticket_id)
+        remove_tree(runs_dir / ticket.ticket_id)
     started = time.monotonic()
     prepared = prepare(ticket, mutant, runs_dir)
     # 숨긴 테스트는 판정에 넣지 않는다 (판정 통과 뒤 따로 돌려 회귀 누출을 센다)
@@ -315,7 +314,7 @@ def run_e2e(tag: str = "full", options: RunOptions | None = None, reporter: str 
     cases = holdout_cases(reporter, limit)
     memory = runs_dir / "attack_memory"  # 조건마다 따로 (다른 조건·이전 실행의 공격이 섞이지 않게)
     if restart and memory.exists():
-        shutil.rmtree(memory)
+        remove_tree(memory)
     previous, config.ATTACK_MEMORY_DIR = config.ATTACK_MEMORY_DIR, memory
     try:
         with ThreadPoolExecutor(workers) as executor:

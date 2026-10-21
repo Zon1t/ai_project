@@ -1,0 +1,17 @@
+# RedFix 화면 테마 (streamlit run을 프로젝트 루트에서 실행할 때 적용)
+# 기본 빨강은 승인 버튼이 경고처럼 보여 차분한 파랑으로 바꾼다.
+
+[theme]
+base = "light"
+primaryColor = "#2f5bea"
+baseRadius = "medium"
+showWidgetBorder = true
+
+[theme.sidebar]
+backgroundColor = "#f4f6fb"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+address = "localhost"

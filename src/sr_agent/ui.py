@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sr_agent import config
+from sr_agent.tools.workspace import remove_tree
 from sr_agent.workflow.state import Decision, Ticket, TicketState
 
 STAGES = ("분석", "수정", "공격", "판정", "승인")
@@ -217,6 +218,16 @@ def replay_tickets() -> list[str]:
     return sorted(p.name for p in root.iterdir() if (p / config.STATE_FILENAME).is_file()) if root.is_dir() else []
 
 
+def load_events(state: TicketState) -> list[dict]:
+    """티켓 상태에 기록된 실행(run_ids)의 로그를 이어 붙인다 (없는 로그는 건너뜀)."""
+    events = []
+    for run_id in state.run_ids:
+        log = config.RUNS_DIR / f"{run_id}.jsonl"
+        if log.is_file():
+            events += [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return events
+
+
 def save_replay(ticket_id: str) -> Path:
     """runs/<ticket_id>의 최종 상태와 그 실행 로그를 data/replay/<ticket_id>/로 저장한다."""
     state = TicketState.load(live_state_path(ticket_id))
@@ -226,14 +237,10 @@ def save_replay(ticket_id: str) -> Path:
         state.decision, state.status = None, "approval_pending" if state.passed else "human_review"
     dest = replay_source(ticket_id)
     if dest.exists():
-        shutil.rmtree(dest)
+        remove_tree(dest)
     dest.mkdir(parents=True)
     state.save(dest / config.STATE_FILENAME)
-    events = []
-    for run_id in state.run_ids:
-        log = config.RUNS_DIR / f"{run_id}.jsonl"
-        if log.is_file():
-            events += [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    events = load_events(state)
     (dest / "events.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events),
                                        encoding="utf-8", newline="\n")
     return dest
@@ -250,6 +257,100 @@ def load_replay(ticket_id: str, reset: bool = False) -> tuple[TicketState, Path,
     events = ([json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
               if events_path.is_file() else [])
     return TicketState.load(work), work, events
+
+
+STEP_LABELS = {"analysis": "분석", "fix": "수정", "attack": "공격", "judge": "판정", "workflow": "완료"}
+TOOL_LABELS = {
+    "predict_fault_location": "결함 위치 예측", "search_history": "유사 이력 검색", "search_rules": "사내 규칙 검색",
+    "get_callers": "호출부 조회", "get_coverage": "커버리지 조회", "read_method": "코드 읽기",
+    "write_repro_test": "재현 테스트 작성", "run_tests": "테스트 실행", "apply_patch": "패치 적용",
+    "run_diff": "차등 실행", "property_attack": "Hypothesis 공격", "attack_memory": "공격 이력 검색",
+    "check_deprecated": "지원 종료 API 검사", "check_style": "팀 스타일 검사", "check_security": "보안 검사",
+}
+
+
+def _ts(event: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat(event["ts"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def format_duration(seconds: float | None) -> str:
+    """초 → '5분 44초' (없으면 '-')."""
+    if seconds is None:
+        return "-"
+    m, s = divmod(round(seconds), 60)
+    return f"{m}분 {s}초" if m else f"{s}초"
+
+
+def format_tokens(tokens: int) -> str:
+    """토큰 수 → '52.9만' 같은 짧은 표기."""
+    return f"{tokens / 10000:.1f}만" if tokens >= 10000 else f"{tokens:,}"
+
+
+def progress_label(event: dict) -> str | None:
+    """재생 중 상태 줄에 보일 한 줄 (지금 무엇을 하는지만). 보일 필요 없으면 None."""
+    stage = STEP_LABELS.get(event.get("step"))
+    if stage is None or event.get("kind") not in ("tool", "llm", "judge", "round", "verify"):
+        return None
+    if event.get("kind") == "tool":
+        return f"{stage} · {TOOL_LABELS.get(event.get('tool'), event.get('tool'))}"
+    if event.get("kind") == "round":
+        label = next((lb for n, lb, _ in config.ATTACK_ANGLES if n == event.get("angle")), event.get("angle"))
+        return f"공격 · {label} 라운드 끝"
+    return f"{stage} 진행 중"
+
+
+def run_summary(events: list[dict]) -> dict:
+    """실행 로그 → 단계별 요약 (화면의 '처리 과정'). 같은 단계가 이어진 구간을 한 줄로 묶는다.
+
+    반환: {"segments": [{stage, attempt, turns, tools, seconds, result}], "seconds", "tokens"}
+    """
+    segments: list[dict] = []
+    fix_count = 0
+    for event in events:
+        step = event.get("step")
+        if step not in ("analysis", "fix", "attack", "judge") or \
+                event.get("kind") not in ("llm", "tool", "verify", "round", "judge"):
+            continue  # 판정 뒤 공격 이력 저장(memory) 같은 부수 기록은 구간을 만들지 않는다
+        if not segments or segments[-1]["step"] != step:
+            if step == "fix":
+                fix_count += 1
+            attempt = None if step == "analysis" else max(fix_count, 1)
+            segments.append({"step": step, "stage": STEP_LABELS[step], "attempt": attempt, "turns": 0, "tools": 0,
+                             "start": _ts(event), "end": _ts(event), "result": ""})
+        seg = segments[-1]
+        seg["end"] = _ts(event) or seg["end"]
+        kind = event.get("kind")
+        if kind == "llm":
+            seg["turns"] += 1
+        elif kind == "tool":
+            seg["tools"] += 1
+            if step == "fix" and event.get("tool") == "apply_patch" and not event.get("error"):
+                seg["result"] = "패치 적용"
+        elif kind == "verify" and step == "analysis":
+            seg["result"] = "재현 테스트가 원본에서 실패함을 확인" if event.get("ok") else \
+                f"재현 확인 실패: {event.get('detail', '')}"
+        elif kind == "verify" and step == "attack":
+            rounds = f"라운드 {len(event['rounds'])}/{event.get('planned_rounds')}회 · " if "rounds" in event else ""
+            found = event.get("findings", 0)
+            seg["result"] = rounds + (f"발견 {found}건 중 코드로 확인 {event.get('verified', 0)}건" if found
+                                      else "발견 없음")
+        elif kind == "judge":
+            failed = ", ".join(CHECK_LABELS.get(n, n) for n in event.get("failed", []))
+            seg["result"] = "통과" if event.get("passed") else f"실패 — {failed}"
+    # 구간 시간: 다음 구간 시작까지 (마지막은 자기 끝까지)
+    for i, seg in enumerate(segments):
+        end = (segments[i + 1]["start"] if i + 1 < len(segments) else None) or seg["end"]
+        seg["seconds"] = (end - seg["start"]).total_seconds() if seg["start"] and end else None
+    stamps = [t for t in map(_ts, events) if t]
+    end_event = next((e for e in reversed(events) if e.get("kind") == "end"), {})
+    return {
+        "segments": [{k: v for k, v in s.items() if k not in ("start", "end")} for s in segments],
+        "seconds": (stamps[-1] - stamps[0]).total_seconds() if len(stamps) > 1 else None,
+        "tokens": end_event.get("tokens") if isinstance(end_event.get("tokens"), int) else None,
+    }
 
 
 def event_message(event: dict) -> str | None:

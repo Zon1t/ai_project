@@ -1,0 +1,3 @@
+# 대상 코드(target/)와 결함 데이터(data/mutants/)는 파일 해시로 검증하므로 줄바꿈 변환을 끈다.
+# Windows의 core.autocrlf=true에서도 저장된 바이트 그대로 받는다 (CRLF로 바뀌면 결함 데이터 재생성이 필요해짐).
+* -text

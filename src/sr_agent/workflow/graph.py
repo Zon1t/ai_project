@@ -26,7 +26,7 @@ from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepa
 from sr_agent.workflow.attack import run_attack, save_confirmed
 from sr_agent.workflow.judge import judge_ticket
 from sr_agent.workflow.reference import build_reference
-from sr_agent.workflow.state import FixAttempt, Ticket, TicketState
+from sr_agent.workflow.state import AttackReport, FixAttempt, Ticket, TicketState
 
 FINAL = {"approval_pending", "human_review", "approved", "rejected"}
 
@@ -131,6 +131,24 @@ def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress
     raise _HumanReview(f"분석 실패: {feedback}")
 
 
+def judge_attack_inputs(previous: list[FixAttempt], current: AttackReport | None) -> AttackReport | None:
+    """판정이 다시 실행할 공격 입력: 이번 시도 + 이전 시도들의 공격 입력 전부 (같은 입력은 하나만).
+
+    재시도에서 이전 공격이 찾은 입력을 다시 내지 않으면, 그 입력에서 되돌아간 패치가 판정을 통과하던 빈틈을 막는다
+    (5일차 E2E 회귀 누출: review.can_write_review의 "배송일 없음" 입력).
+    """
+    prior = [f for a in previous if a.attack for f in a.attack.findings]
+    if not prior:
+        return current
+    base = current or AttackReport()
+    seen, merged = set(), []
+    for f in [*base.findings, *prior]:
+        if (f.method, f.input_json) not in seen:
+            seen.add((f.method, f.input_json))
+            merged.append(f)
+    return base.model_copy(update={"findings": merged})
+
+
 def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None],
                    options: RunOptions) -> None:
     analysis = state.analysis
@@ -154,7 +172,8 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
                      f"발견 {len(report.verified())}건 (확인됨) → 판정 (코드)")
         else:
             progress("공격 단계 생략 (Ablation) → 판정 (코드)")
-        attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro, attempt.attack)
+        attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro,
+                                     judge_attack_inputs(state.attempts, attempt.attack))
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
         if attempt.attack:

@@ -37,6 +37,18 @@ def test_read_method_syntax_error(ws, work_calc):
     assert "문법 오류" in read_method(ws, "calc.add")["error"]
 
 
+def test_read_method_appends_referenced_module_constants(ws):
+    """분기 기준 상수(사유 코드 목록 등)를 함께 보여 준다. 쓰지 않는 상수와 함수 안 지역 변수는 빼고."""
+    write(ws.work / "src/order_settlement/ship.py",
+          "SELLER = (\"DEFECT\", \"WRONG_ITEM\")\nBUYER = (\"CHANGE_MIND\",)\nUNUSED = 1\n\n\n"
+          "def payer(reason):\n    local = 2\n    if reason in SELLER:\n        return \"SELLER\"\n"
+          "    if reason in BUYER:\n        return \"BUYER\"\n    return local\n")
+    text = read_method(ws, "ship.payer")
+    head, _, constants = text.partition("\n\n# 이 함수가 참조하는 모듈 상수 (src/order_settlement/ship.py)\n")
+    assert head.startswith("# src/order_settlement/ship.py:6-12\ndef payer(reason):")
+    assert constants == "SELLER = (\"DEFECT\", \"WRONG_ITEM\")\nBUYER = (\"CHANGE_MIND\",)"
+
+
 # ---------------- get_callers ----------------
 
 def test_get_callers_follows_module_and_from_imports(bug_ws):

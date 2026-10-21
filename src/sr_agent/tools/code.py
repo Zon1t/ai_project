@@ -69,7 +69,28 @@ def read_method(ws: Workspace, method: str) -> str | dict:
     source = "\n".join(text.splitlines()[start - 1:node.end_lineno])
     if len(source) > _MAX_SOURCE_CHARS:
         source = source[:_MAX_SOURCE_CHARS] + "\n...(생략)"
-    return f"# {rel}:{start}-{node.end_lineno}\n{source}"
+    result = f"# {rel}:{start}-{node.end_lineno}\n{source}"
+    if constants := _referenced_constants(tree, node, text):
+        result += f"\n\n# 이 함수가 참조하는 모듈 상수 ({rel})\n{constants}"
+    return result
+
+
+def _referenced_constants(tree: ast.Module, func: ast.AST, text: str) -> str:
+    """함수 본문이 읽는 모듈 최상단 상수의 정의 (예: SELLER_FAULT_REASONS = (...)).
+
+    함수만 보여 주면 분기 기준이 되는 상수 값을 몰라, 재현 테스트에 코드에 없는 입력값(사유 코드 등)을 지어 쓴다.
+    """
+    used = {n.id for n in ast.walk(func) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    lines = text.splitlines()
+    parts = []
+    for stmt in tree.body:
+        targets = (stmt.targets if isinstance(stmt, ast.Assign)
+                   else [stmt.target] if isinstance(stmt, ast.AnnAssign) else [])
+        names = {t.id for t in targets if isinstance(t, ast.Name)}
+        if names & used:
+            parts.append("\n".join(lines[stmt.lineno - 1:stmt.end_lineno]))
+    joined = "\n".join(parts)
+    return joined if len(joined) <= _MAX_SOURCE_CHARS else joined[:_MAX_SOURCE_CHARS] + "\n...(생략)"
 
 
 # ---------------- get_callers ----------------

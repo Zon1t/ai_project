@@ -25,7 +25,7 @@ from sr_agent.tools.attack import compare_inputs, compare_versions, input_key
 from sr_agent.tools.checks import module_findings, orphaned_import_lines
 from sr_agent.tools.code import _split_method, find_function, module_path
 from sr_agent.tools.execution import _validate_inputs, run_diff, run_tests
-from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree
+from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, remove_tree
 from sr_agent.workflow.reference import build_reference
 from sr_agent.workflow.state import AttackReport, JudgeCheck, JudgeResult, JudgeSpec, Ticket
 
@@ -93,9 +93,9 @@ def hidden_tests_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
     """E2E: 에이전트에게 숨긴 정답 테스트를 수정본에서 돌린다 (작업본 + 대상 프로젝트 원래 테스트)."""
     dest = ws.root / "hidden"
     if dest.exists():
-        shutil.rmtree(dest)
+        remove_tree(dest)
     shutil.copytree(ws.work, dest, ignore=shutil.ignore_patterns(*config.COPY_IGNORE_PATTERNS))
-    shutil.rmtree(dest / config.TARGET_TEST_SUBDIR)
+    remove_tree(dest / config.TARGET_TEST_SUBDIR)
     shutil.copytree(config.TARGET_ROOT / config.TARGET_TEST_SUBDIR, dest / config.TARGET_TEST_SUBDIR,
                     ignore=shutil.ignore_patterns(*config.COPY_IGNORE_PATTERNS))
     tests = list(dict.fromkeys(t.split("[")[0] for t in spec.hidden_tests))

@@ -64,8 +64,21 @@ def test_shap_contributions_explain_score(locator):
                        atol=1e-4)
 
 
-def test_candidate_mismatch_requires_retraining(locator, tmp_path):
+def test_candidate_change_still_predicts_and_marks_new_functions(locator, tmp_path):
+    """주 모델은 함수 정체와 무관한 피처만 써서, 함수가 추가·삭제된 코드에도 예측한다."""
+    added = _cand("m9.brand_new", "def brand_new():\n    return 99")
+    loc = FaultLocator(tmp_path / "model.json", tmp_path / "meta.json", [*CANDS[:-1], added],
+                       _fake_embedder("bge-m3", tmp_path))
+    result = loc.predict("결제 중 오류가 납니다", top_k=6)
+    assert {r["method"] for r in result} == {c.method for c in [*CANDS[:-1], added]}
+    assert [r["method"] for r in result if r.get("new_function")] == ["m9.brand_new"]
+
+
+def test_candidate_mismatch_requires_retraining_with_past_defects(locator, tmp_path):
+    """함수별 과거 결함 수를 쓰는 모델은 함수 목록이 바뀌면 재학습을 요구한다."""
     meta = tmp_path / "meta.json"
+    data = json.loads(meta.read_text(encoding="utf-8"))
+    meta.write_text(json.dumps({**data, "features": [*data["features"], "past_defects"]}), encoding="utf-8")
     with pytest.raises(ValueError, match="재학습"):
         FaultLocator(tmp_path / "model.json", meta, CANDS[:-1], _fake_embedder("bge-m3", tmp_path))
 

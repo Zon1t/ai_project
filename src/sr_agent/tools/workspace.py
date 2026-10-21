@@ -8,8 +8,10 @@ target/ 원본은 복사할 때만 읽는다.
 """
 
 import hashlib
+import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -62,6 +64,20 @@ class Workspace:
             raise WorkspaceError(f"알 수 없는 version: {version!r} (original|patched)") from None
 
 
+def _clear_readonly_and_retry(func, path, _exc) -> None:
+    os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+    func(path)
+
+
+def remove_tree(path: Path) -> None:
+    """디렉터리를 지운다. 읽기 전용 속성이 붙은 항목은 속성을 풀고 다시 지운다.
+
+    Windows에서 OneDrive 폴더 등은 디렉터리에 읽기 전용(R) 속성이 붙고, copytree가 이를 복사본에도 옮겨
+    shutil.rmtree가 접근 거부로 실패한다.
+    """
+    shutil.rmtree(path, onexc=_clear_readonly_and_retry)
+
+
 def validate_ticket_id(ticket_id: str) -> str:
     """디렉터리 이름으로 안전한 티켓 ID인지 확인한다."""
     if not isinstance(ticket_id, str) or not _TICKET_ID.match(ticket_id):
@@ -90,7 +106,7 @@ def prepare_workspace(
         if not overwrite and ws.original.is_dir() and ws.work.is_dir():
             ws.repro_tests.mkdir(exist_ok=True)
             return ws
-        shutil.rmtree(ws.root)
+        remove_tree(ws.root)
 
     ignore = shutil.ignore_patterns(*config.COPY_IGNORE_PATTERNS)
     ws.root.mkdir(parents=True)

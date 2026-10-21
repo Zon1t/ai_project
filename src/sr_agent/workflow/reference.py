@@ -10,7 +10,7 @@ from pathlib import Path
 
 from sr_agent import config
 from sr_agent.tools.code import replace_function
-from sr_agent.tools.workspace import Workspace
+from sr_agent.tools.workspace import Workspace, remove_tree
 from sr_agent.workflow.state import JudgeSpec
 
 REFERENCE_DIRNAME = "reference"
@@ -20,7 +20,7 @@ def build_reference(ws: Workspace, spec: JudgeSpec) -> Path:
     """참조 버전을 새로 만들고 그 src 경로를 돌려준다."""
     dest = ws.root / REFERENCE_DIRNAME
     if dest.exists():
-        shutil.rmtree(dest)
+        remove_tree(dest)
     shutil.copytree(ws.original, dest, ignore=shutil.ignore_patterns(*config.COPY_IGNORE_PATTERNS))
     result = replace_function(dest, spec.reference.method, spec.reference.code)
     if not result["applied"]:

@@ -164,42 +164,85 @@ def _replay_app(dirs, state: TicketState) -> AppTest:
 
 def test_app_replay_renders_and_approves(dirs):
     at = _replay_app(dirs, _state())
-    assert at.title[0].value.startswith("SR-2041")
-    assert len(at.tabs) == 4 and [t.label for t in at.tabs] == ["결함 위치", "근거", "패치 diff", "공격 로그"]
+    assert at.main.title[0].value.startswith("SR-2041")
+    assert len(at.tabs) == 4 and [t.label.split(": ")[-1] for t in at.tabs] == ["결함 위치", "근거", "패치 diff",
+                                                                                 "공격 로그"]
     assert any("판정 통과" in s.value for s in at.subheader)
-    approve = next(b for b in at.button if b.label == "✅ 승인 후 반영")
+    assert any(m.label == "판정 조건" for m in at.metric)  # 결론 카드를 본문 위쪽에
+    approve = next(b for b in at.button if b.label == "승인 후 반영")
     assert not approve.disabled
     approve.click().run()
     assert not at.exception
     assert TicketState.load(ui.replay_working_path("SR-2041")).status == "approved"
-    assert any("승인됨" in s.value for s in at.success)
+    assert any("승인됨" in s.proto.title for s in at.success)
 
 
 def test_app_approve_disabled_when_judge_failed(dirs):
     at = _replay_app(dirs, _state("human_review", [_attempt(1, False, under=3)]))
-    approve = next(b for b in at.button if b.label == "✅ 승인 후 반영")
+    approve = next(b for b in at.button if b.label == "승인 후 반영")
     assert approve.disabled
     assert any("사람 검토" in w.value for w in at.warning) is False  # 사유 없는 사람 검토 상태
+    assert any("실패" in e.label for e in at.expander)  # 실패한 판정 조건은 펼쳐서 보여 준다
     at.text_area[0].input("정답과 다름").run()
-    next(b for b in at.button if b.label == "반려").click().run()
+    next(b for b in at.button if b.label == "반려 확정").click().run()
     assert TicketState.load(ui.replay_working_path("SR-2041")).decision.reason == "정답과 다름"
 
 
-def test_app_replay_button_streams_events(dirs):
+def test_app_replay_button_shows_summary_not_raw_log(dirs):
+    """재생 중에는 진행 표시만, 끝나면 처리 과정 요약을 펼친다. 원본 로그는 토글을 켜야 보인다."""
     at = _replay_app(dirs, _state())
     next(b for b in at.button if "재생" in b.label).click().run()
     assert not at.exception
-    assert any("결과 정리" in m.value for m in at.markdown)
+    assert not any("결과 정리" in m.value for m in at.markdown)
+    process = next(e for e in at.expander if e.label.startswith("처리 과정"))
+    assert process.proto.expanded
+    at.toggle(key="raw_log").set_value(True).run()
+    assert any("결과 정리" in c.value for c in at.code)
 
 
 def test_app_live_mode_lists_scenarios(dirs):
     at = AppTest.from_file(str(APP), default_timeout=60)
     at.run()
-    at.sidebar.radio[0].set_value("실시간 실행").run()
+    at.sidebar.segmented_control[0].set_value("실시간").run()
     assert not at.exception
-    labels = at.sidebar.radio[1].options
+    labels = at.sidebar.radio[0].options
     assert any("SR-2041" in o for o in labels) and any("SR-2103" in o for o in labels)
     assert any("아직 실행하지 않은" in i.value for i in at.info)
+
+
+def test_run_summary_groups_stages():
+    events = [
+        {"ts": "2026-10-21T10:00:00", "step": "analysis", "kind": "llm", "turn": 1},
+        {"ts": "2026-10-21T10:00:10", "step": "analysis", "kind": "tool", "tool": "read_method"},
+        {"ts": "2026-10-21T10:01:00", "step": "analysis", "kind": "verify", "ok": True},
+        {"ts": "2026-10-21T10:02:00", "step": "fix", "kind": "tool", "tool": "apply_patch"},
+        {"ts": "2026-10-21T10:03:00", "step": "attack", "kind": "verify", "findings": 0, "verified": 0,
+         "rounds": [{}, {}, {}], "planned_rounds": 3},
+        {"ts": "2026-10-21T10:04:00", "step": "judge", "kind": "judge", "attempt": 1, "passed": False,
+         "failed": ["reference_property"]},
+        {"ts": "2026-10-21T10:04:01", "step": "attack", "kind": "memory"},  # 판정 뒤 이력 저장은 구간이 아님
+        {"ts": "2026-10-21T10:05:00", "step": "fix", "kind": "llm", "turn": 1},
+        {"ts": "2026-10-21T10:06:00", "step": "workflow", "kind": "end", "tokens": 1234},
+    ]
+    s = ui.run_summary(events)
+    assert [(g["stage"], g["attempt"]) for g in s["segments"]] == [("분석", None), ("수정", 1), ("공격", 1),
+                                                                    ("판정", 1), ("수정", 2)]
+    assert s["segments"][0]["turns"] == 1 and s["segments"][0]["tools"] == 1
+    assert s["segments"][0]["seconds"] == 120
+    assert s["segments"][1]["result"] == "패치 적용"
+    assert s["segments"][2]["result"] == "라운드 3/3회 · 발견 없음"
+    assert s["segments"][3]["result"].startswith("실패")
+    assert s["seconds"] == 360 and s["tokens"] == 1234
+    assert ui.run_summary([]) == {"segments": [], "seconds": None, "tokens": None}
+
+
+def test_progress_label_and_formatting():
+    assert ui.progress_label({"step": "analysis", "kind": "tool", "tool": "predict_fault_location"}) == \
+        "분석 · 결함 위치 예측"
+    assert ui.progress_label({"step": "workflow", "kind": "end"}) is None
+    assert ui.format_duration(344) == "5분 44초" and ui.format_duration(9) == "9초"
+    assert ui.format_duration(None) == "-"
+    assert ui.format_tokens(529290) == "52.9만" and ui.format_tokens(123) == "123"
 
 
 def test_event_messages_label_parallel_attack_rounds(tmp_path):
@@ -213,3 +256,15 @@ def test_event_messages_label_parallel_attack_rounds(tmp_path):
     assert ui.event_message(event).startswith("[공격·타입·빈 값]")
     assert ui.event_message({"step": "attack", "kind": "llm", "turn": 1, "output_summary": "final"}) == \
         "[공격] 1턴 — 결과 정리"
+
+
+def test_app_guide_dialog_and_unevaluated_notice(dirs):
+    """? 버튼으로 사용 설명서를 열고, 미평가 조건이 있으면 승인 전 직접 확인하라고 알린다."""
+    attempt = _attempt(1, True)
+    attempt.judge.checks.append(JudgeCheck(name="attack_findings_rechecked", passed=None,
+                                           detail="정답 구현 없음 — 공격 입력 재판정 미평가"))
+    at = _replay_app(dirs, _state(attempts=[attempt]))
+    assert any("자동으로 확인하지 못한 조건 1개" in i.proto.title for i in at.info)
+    next(b for b in at.button if b.label == "사용 설명서").click().run()
+    assert not at.exception
+    assert any("RedFix가 하는 일" in m.value for m in at.markdown)

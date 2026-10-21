@@ -2,7 +2,8 @@
 
 학습된 혼합형 모델(data/models/fault_ranker.json)로 대상 프로젝트 함수의 순위를 매기고,
 상위 k개마다 SHAP 기여도가 큰 피처 3개를 근거로 붙인다.
-후보 함수는 target/ 원본 기준이다 (학습 때와 같은 목록이어야 하며, 다르면 재학습을 요구한다).
+후보 함수는 target/ 원본 기준이다. 주 모델 피처는 함수 정체와 무관해 함수가 추가·삭제돼도 예측하고
+(새 함수는 결과에 new_function=True), "과거 결함 수" 피처를 쓰는 모델만 목록이 다르면 재학습을 요구한다.
 모델·임베딩은 처음 호출할 때 한 번만 올린다. 실패는 예외 대신 {"error": ...}로 돌려준다.
 """
 
@@ -45,7 +46,10 @@ class FaultLocator:
         meta = json.loads(Path(meta_path or config.FAULT_MODEL_META_PATH).read_text(encoding="utf-8"))
         self.features: list[str] = meta["features"]
         self.candidates = candidates if candidates is not None else load_candidates()
-        if [c.method for c in self.candidates] != meta["candidates"]:
+        # 주 모델 피처(유사도·스택트레이스·길이·복잡도)는 함수가 무엇인지와 무관해 함수가 추가·삭제돼도 그대로 점수를
+        # 매길 수 있다. 함수별 학습 데이터에 기대는 "과거 결함 수" 피처를 쓰는 모델만 재학습을 요구한다.
+        self.new_candidates = sorted({c.method for c in self.candidates} - set(meta["candidates"]))
+        if [c.method for c in self.candidates] != meta["candidates"] and "past_defects" in self.features:
             raise ValueError("대상 프로젝트 함수 목록이 학습 때와 다름 (python -m sr_agent.ml.train으로 재학습 필요)")
         self.ranker = XGBRanker()
         self.ranker.load_model(Path(model_path or config.FAULT_MODEL_PATH))
@@ -73,9 +77,11 @@ class FaultLocator:
         results = []
         for rank, j in enumerate(top):
             order = np.argsort(-contributions[rank], kind="stable")[: config.PREDICT_REASONS]
+            method = self.candidates[j].method
             results.append({
-                "method": self.candidates[j].method,
+                "method": method,
                 "score": round(float(scores[j]), 4),
+                **({"new_function": True} if method in self.new_candidates else {}),
                 "reasons": [{
                     "feature": self.features[f],
                     "label": FEATURE_LABELS[self.features[f]],

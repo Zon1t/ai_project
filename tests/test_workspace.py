@@ -6,6 +6,7 @@ from sr_agent.tools.workspace import (
     hash_tree,
     open_workspace,
     prepare_workspace,
+    remove_tree,
     resolve_in_workspace,
     verify_original_intact,
 )
@@ -104,3 +105,16 @@ def test_resolve_rejects_absolute_outside(ws, tmp_path):
 def test_unknown_version_rejected(ws):
     with pytest.raises(WorkspaceError):
         ws.version_dir("main")
+
+
+def test_remove_tree_handles_readonly(tmp_path):
+    """OneDrive 폴더처럼 읽기 전용 속성이 붙은 디렉터리·파일도 지운다 (copytree가 속성을 복사함)."""
+    import os
+    import stat
+
+    target = tmp_path / "hidden" / "tests"
+    write(target / "test_a.py", "x = 1\n")
+    os.chmod(target / "test_a.py", stat.S_IREAD)
+    os.chmod(target, stat.S_IREAD | stat.S_IEXEC)
+    remove_tree(tmp_path / "hidden")
+    assert not (tmp_path / "hidden").exists()

@@ -316,3 +316,21 @@ def test_memory_saves_only_judge_confirmed_findings(run):
     assert report.findings[0].verified  # 수정본 0 ≠ 원본 -200
     assert report.saved_to_memory == 0 and state.passed  # 정답도 0 → 판정 통과, 저장 안 함
     assert attack_memory("search", "defect", {"method": "calc.payable"}) == []
+
+
+def test_judge_rechecks_attack_inputs_from_previous_attempts():
+    """재시도 판정은 이전 시도의 공격 입력까지 다시 실행한다 (같은 입력은 하나만, 회귀 누출 방지)."""
+    from sr_agent.workflow.state import AttackReport, FixAttempt, VerifiedFinding
+
+    def finding(inp: str) -> VerifiedFinding:
+        return VerifiedFinding(kind="regression", method="review.can_write_review", input_json=inp,
+                               expected_json="false", rule_id="", explanation="")
+
+    first = FixAttempt(number=1, attack=AttackReport(findings=[finding("[null]"), finding("[1]")]))
+    current = AttackReport(findings=[finding("[1]"), finding("[2]")])
+    merged = graph.judge_attack_inputs([first], current)
+    assert [f.input_json for f in merged.findings] == ["[1]", "[2]", "[null]"]
+    assert [f.input_json for f in current.findings] == ["[1]", "[2]"]  # 시도별 기록은 그대로
+    assert graph.judge_attack_inputs([], current) is current
+    assert graph.judge_attack_inputs([FixAttempt(number=1)], None) is None  # 공격 끔 (Ablation)
+    assert [f.input_json for f in graph.judge_attack_inputs([first], None).findings] == ["[null]", "[1]"]
