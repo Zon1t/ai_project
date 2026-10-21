@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sr_agent import config
-from sr_agent.runlog import RunLog, new_run_id
+from sr_agent.runlog import RunLog, TaggedLog, new_run_id
 from sr_agent.tools.workspace import Workspace
 
 
@@ -36,7 +36,7 @@ class RunContext:
     """에이전트·도구 호출이 같이 쓰는 실행 정보."""
 
     ticket_id: str
-    log: RunLog
+    log: RunLog | TaggedLog  # 공격 라운드는 관점을 붙인 TaggedLog
     budget: TokenBudget = field(default_factory=TokenBudget)
     ws: Workspace | None = None
 

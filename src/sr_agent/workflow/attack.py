@@ -19,6 +19,7 @@ verified는 코드로 확인된 사실만 뜻한다.
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 from openai import OpenAI
 
@@ -86,6 +87,7 @@ def _run_round(client: OpenAI, ticket: Ticket, analysis: AnalysisOutput | None, 
                ) -> tuple[AttackRound, list[VerifiedFinding]]:
     """관점 하나로 공격하고 발견을 확인한다. 응답 거부는 그대로 올린다 (사람 검토)."""
     rnd = AttackRound(angle=angle[0], label=angle[1])
+    ctx = replace(ctx, log=ctx.log.tagged(angle=angle[0]))  # 동시에 도는 라운드의 로그 줄을 구분 (예산은 공유)
     user_input = attack_input(ticket, analysis, attempt.fix, attempt.diff, angle, round_no, rounds)
     try:
         result = run_agent(client, ATTACK, user_input, ctx)
@@ -98,7 +100,7 @@ def _run_round(client: OpenAI, ticket: Ticket, analysis: AnalysisOutput | None, 
     rnd.summary, rnd.attempts = out.summary, out.attempts
     findings = [verify_finding(ctx.ws, f).model_copy(update={"angle": angle[0]}) for f in out.findings]
     rnd.findings, rnd.verified = len(findings), sum(f.verified for f in findings)
-    ctx.log.write(step="attack", kind="round", angle=angle[0], round=round_no, rounds=rounds,
+    ctx.log.write(step="attack", kind="round", round=round_no, rounds=rounds,
                   findings=rnd.findings, verified=rnd.verified, error=rnd.error)
     return rnd, findings
 

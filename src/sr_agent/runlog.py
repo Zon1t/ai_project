@@ -27,3 +27,21 @@ class RunLog:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.path, "a", encoding="utf-8", newline="\n") as f:
                 f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+    def tagged(self, **fields) -> "TaggedLog":
+        """모든 줄에 fields를 붙여 같은 파일에 쓰는 기록기 (예: 동시에 도는 공격 라운드의 관점)."""
+        return TaggedLog(self, fields)
+
+
+class TaggedLog:
+    """RunLog에 고정 필드를 붙여 쓴다. 파일·잠금은 원래 RunLog의 것을 쓴다."""
+
+    def __init__(self, base: RunLog, fields: dict):
+        self.base, self.fields = base, fields
+        self.run_id, self.path = base.run_id, base.path
+
+    def write(self, **record) -> None:
+        self.base.write(**record, **self.fields)
+
+    def tagged(self, **fields) -> "TaggedLog":
+        return TaggedLog(self.base, {**self.fields, **fields})

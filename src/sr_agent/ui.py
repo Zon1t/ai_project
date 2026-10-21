@@ -257,6 +257,8 @@ def event_message(event: dict) -> str | None:
     step = {"analysis": "분석", "fix": "수정", "attack": "공격", "judge": "판정", "workflow": "완료"}.get(
         event.get("step"), event.get("step"))
     kind = event.get("kind")
+    if event.get("angle") and kind in ("llm", "tool"):  # 동시에 도는 공격 라운드 구분
+        step += "·" + next((lb for n, lb, _ in config.ATTACK_ANGLES if n == event["angle"]), event["angle"])
     if kind == "llm":
         what = event.get("output_summary") or ""
         return f"[{step}] {event.get('turn')}턴 — " + ("결과 정리" if what == "final" else f"도구 호출: {what}")

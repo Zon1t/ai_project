@@ -200,3 +200,16 @@ def test_app_live_mode_lists_scenarios(dirs):
     labels = at.sidebar.radio[1].options
     assert any("SR-2041" in o for o in labels) and any("SR-2103" in o for o in labels)
     assert any("아직 실행하지 않은" in i.value for i in at.info)
+
+
+def test_event_messages_label_parallel_attack_rounds(tmp_path):
+    """동시에 도는 공격 라운드의 턴·도구 줄에 관점을 붙인다 (실행 로그의 angle 필드)."""
+    from sr_agent.runlog import RunLog
+
+    log = RunLog("t", tmp_path).tagged(angle="types")
+    log.write(step="attack", kind="tool", turn=2, tool="run_diff", input="[]")
+    event = json.loads((tmp_path / "t.jsonl").read_text(encoding="utf-8"))
+    assert event["angle"] == "types" and event["run_id"] == "t"
+    assert ui.event_message(event).startswith("[공격·타입·빈 값]")
+    assert ui.event_message({"step": "attack", "kind": "llm", "turn": 1, "output_summary": "final"}) == \
+        "[공격] 1턴 — 결과 정리"
