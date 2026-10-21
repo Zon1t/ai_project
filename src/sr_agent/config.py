@@ -139,7 +139,7 @@ HISTORY_TEXT_CHARS = 400  # 검색 결과의 티켓 문장 길이 상한
 # LLM (에이전트 단계에서 사용)
 MODEL = "gpt-5"  # 분석·수정·공격 에이전트
 MODEL_BULK = "gpt-6-luna"  # F2-3 티켓 문장 대량 생성 전용
-LLM_TIMEOUT_S = 120
+LLM_TIMEOUT_S = 300  # 추론 high는 응답이 길어 120초에서 시간 초과가 났음 (5일차 이후 재측정)
 LLM_MAX_RETRIES = 3
 MAX_OUTPUT_TOKENS = 16000  # 추론 토큰 포함
 MAX_PATCH_RETRIES = 3

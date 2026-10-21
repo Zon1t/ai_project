@@ -31,7 +31,12 @@ def main() -> None:
         for tag in args.conditions:
             label, options = CONDITIONS[tag]
             print(f"=== {tag} ({label}) ===", flush=True)
-            summary = run_e2e(tag, options, workers=args.workers, restart=args.restart)
+            from sr_agent.llm import LLMQuotaExceeded
+
+            try:
+                summary = run_e2e(tag, options, workers=args.workers, restart=args.restart)
+            except LLMQuotaExceeded as e:  # 끝난 티켓은 저장돼 있으니 같은 명령으로 이어서 실행
+                raise SystemExit(f"중단: {e}") from None
             print(f"  해결 {summary['solved']}/{summary['n']}, 누출 {summary['regression_leaks']}건, "
                   f"${summary['cost_usd_total']}", flush=True)
     print(f"결과: {write_report()}")

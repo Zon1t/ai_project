@@ -211,9 +211,11 @@ def run_controls(replay: bool, ticket: Ticket, events: list[dict], stage_slot) -
                 status.update(label=f":shimmer[{message}] · {elapsed}")
                 status.write(f"`{elapsed}` {message}")
 
+            from sr_agent.llm import LLMQuotaExceeded
+
             try:
                 state = run_ticket(ticket, _client(), restart=restart, progress=progress)
-            except ValueError as e:
+            except (ValueError, LLMQuotaExceeded) as e:
                 status.update(label=str(e), state="error")
                 return False
             ok = state.status == "approval_pending"

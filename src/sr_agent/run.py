@@ -81,7 +81,7 @@ def main() -> None:
 
     try:
         state = run_ticket(ticket, llm.get_client(), restart=args.restart, progress=progress)
-    except ValueError as e:
+    except (ValueError, llm.LLMQuotaExceeded) as e:
         raise SystemExit(str(e)) from None
     print(report(state))
     print(f"소요 시간: {time.monotonic() - started:.0f}초")

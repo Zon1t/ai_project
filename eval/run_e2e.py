@@ -45,8 +45,13 @@ def main() -> None:
     condition = args.tag or ("_".join(off) if off else "full")
     tag = condition + (f"_n{args.limit}" if args.limit else "")
     only = [x.strip() for x in args.only.split(",") if x.strip()] if args.only else None
-    summary = run_e2e(tag, options, args.reporter, args.limit, args.workers, args.restart, runs_tag=condition,
-                      only=only)
+    from sr_agent.llm import LLMQuotaExceeded
+
+    try:
+        summary = run_e2e(tag, options, args.reporter, args.limit, args.workers, args.restart, runs_tag=condition,
+                          only=only)
+    except LLMQuotaExceeded as e:  # 끝난 티켓은 저장돼 있으니 같은 명령으로 이어서 실행
+        raise SystemExit(f"중단: {e}") from None
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"결과: {config.EVAL_RESULTS_DIR / f'e2e_{tag}.md'}")
 

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sr_agent import config
 from sr_agent.agents.context import RunContext
 from sr_agent.agents.tooling import REGISTRY, _summary, execute, to_output
-from sr_agent.llm import LLMError, LLMRefusal, _refusal, usage_dict
+from sr_agent.llm import LLMError, LLMQuotaExceeded, LLMRefusal, _refusal, is_quota_error, usage_dict
 
 _DROP_KEYS = {"parsed", "parsed_arguments"}  # parse()가 붙이는 필드. 다시 입력으로 보내면 API가 거부한다
 FINAL_TURN_NOTICE = ("도구 호출 횟수 상한에 도달했다. 더 이상 도구를 부를 수 없다. "
@@ -91,14 +91,24 @@ def _call(client: OpenAI, spec: AgentSpec, model: str, items: list, tools: list[
         kwargs.update(tools=tools, tool_choice="none" if turn == spec.max_turns else "auto")
     started = time.monotonic()
     try:
-        response = client.responses.parse(model=model, **kwargs)
-    except Exception as e:
-        if not (spec.fallback_model and spec.fallback_model != model and _should_fallback(e)):
-            raise
-        ctx.log.write(step=spec.name, kind="fallback", turn=turn, model=model, fallback_model=spec.fallback_model,
+        try:
+            response = client.responses.parse(model=model, **kwargs)
+        except Exception as e:
+            if not (spec.fallback_model and spec.fallback_model != model and _should_fallback(e)
+                    and not is_quota_error(e)):
+                raise
+            ctx.log.write(step=spec.name, kind="fallback", turn=turn, model=model,
+                          fallback_model=spec.fallback_model, error=_summary(f"{type(e).__name__}: {e}"))
+            model = spec.fallback_model
+            response = client.responses.parse(model=model, **kwargs)
+    except openai.APIError as e:
+        # SDK 재시도(fallback 포함) 뒤에도 실패: 크레딧 소진은 멈추고, 나머지(타임아웃·5xx 등)는 이 티켓만 사람 검토로
+        ctx.log.write(step=spec.name, kind="api_error", turn=turn, model=model,
                       error=_summary(f"{type(e).__name__}: {e}"))
-        model = spec.fallback_model
-        response = client.responses.parse(model=model, **kwargs)
+        if is_quota_error(e):
+            raise LLMQuotaExceeded("OpenAI API 크레딧(사용 한도) 소진 — 충전 후 같은 티켓을 다시 실행하면 이어서 "
+                                   "진행합니다") from e
+        raise LLMError(f"API 호출 실패 ({type(e).__name__}): {_summary(str(e))}") from e
     usage = usage_dict(response.usage)
     calls = [o.name for o in response.output or [] if getattr(o, "type", None) == "function_call"]
     ctx.log.write(step=spec.name, kind="llm", turn=turn, model=model, status=response.status, tokens=usage,

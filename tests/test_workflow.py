@@ -334,3 +334,20 @@ def test_judge_rechecks_attack_inputs_from_previous_attempts():
     assert graph.judge_attack_inputs([], current) is current
     assert graph.judge_attack_inputs([FixAttempt(number=1)], None) is None  # 공격 끔 (Ablation)
     assert [f.input_json for f in graph.judge_attack_inputs([first], None).findings] == ["[null]", "[1]"]
+
+
+def test_quota_exhausted_stops_without_finishing_and_resumes(run, tmp_path):
+    """크레딧 소진은 사람 검토로 끝내지 않고 멈춘다. 충전 후 다시 실행하면 끝난 분석은 건너뛰고 이어서 한다."""
+    from sr_agent.llm import LLMError, LLMQuotaExceeded
+
+    agents = FakeAgents(patches=[LLMQuotaExceeded("크레딧 소진"), GOOD])
+    with pytest.raises(LLMQuotaExceeded):
+        run(agents)
+    saved = TicketState.load(tmp_path / "runs" / TICKET.ticket_id / config.STATE_FILENAME)
+    assert saved.status == "fixing" and saved.repro_verified and saved.human_review_reason is None
+    state = run(agents)
+    assert state.status == "approval_pending" and len(agents.inputs["analysis"]) == 1
+
+    other = FakeAgents(patches=[LLMError("API 호출 실패 (APITimeoutError): Request timed out.")])
+    state = run(other, ticket=TICKET.model_copy(update={"ticket_id": "SR-0002"}))
+    assert state.status == "human_review" and "APITimeoutError" in state.human_review_reason  # 이 티켓만

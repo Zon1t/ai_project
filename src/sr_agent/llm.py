@@ -21,6 +21,19 @@ class LLMRefusal(LLMError):
     """모델이 거부함. 해당 건은 사람 검토로 넘긴다."""
 
 
+class LLMQuotaExceeded(RuntimeError):
+    """API 사용 한도(크레딧) 소진. 다른 티켓도 모두 실패하므로 끝난 것으로 기록하지 않고 멈춘다.
+
+    충전 후 같은 티켓·배치를 다시 실행하면 저장된 단계부터 이어서 진행한다.
+    """
+
+
+def is_quota_error(error: Exception) -> bool:
+    """크레딧·사용 한도 소진(429 insufficient_quota). 일시적인 속도 제한(rate limit)과 구분한다."""
+    code = getattr(error, "code", None)
+    return code in ("insufficient_quota", "credit_balance_exhausted") or "insufficient_quota" in str(error)
+
+
 @dataclass(frozen=True)
 class ParsedResponse:
     parsed: BaseModel

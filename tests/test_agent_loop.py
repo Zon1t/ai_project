@@ -154,13 +154,35 @@ def test_fallback_on_server_error(ctx):
 
 
 def test_no_fallback_by_default_or_for_client_errors(ctx):
+    """fallback이 없거나 클라이언트 오류면 다시 요청하지 않고, 이 티켓만 사람 검토로 갈 수 있게 LLMError로 올린다."""
+    from sr_agent.llm import LLMError
+
     assert config.MODEL_FALLBACK is None
-    with pytest.raises(openai.InternalServerError):
+    with pytest.raises(LLMError, match="InternalServerError"):
         run_agent(FakeClient(_server_error()), spec(), "t", ctx)
     request = httpx.Request("POST", "https://api.openai.com/v1/responses")
     bad = openai.BadRequestError("bad", response=httpx.Response(400, request=request), body=None)
-    with pytest.raises(openai.BadRequestError):
-        run_agent(FakeClient(bad), spec(fallback_model="fallback-model"), "t", ctx)
+    client = FakeClient(bad)
+    with pytest.raises(LLMError, match="BadRequestError"):
+        run_agent(client, spec(fallback_model="fallback-model"), "t", ctx)
+    assert len(client.calls) == 1
+
+
+def test_timeout_becomes_llm_error_and_quota_stops(ctx):
+    """시간 초과는 LLMError(사람 검토), 크레딧 소진은 LLMQuotaExceeded(끝난 것으로 기록하지 않고 멈춤)."""
+    from sr_agent.llm import LLMError, LLMQuotaExceeded
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    with pytest.raises(LLMError, match="APITimeoutError"):
+        run_agent(FakeClient(openai.APITimeoutError(request=request)), spec(), "t", ctx)
+    quota = openai.RateLimitError(
+        "no credits", response=httpx.Response(429, request=request),
+        body={"type": "insufficient_quota", "code": "insufficient_quota", "message": "no credits"})
+    client = FakeClient(quota)
+    with pytest.raises(LLMQuotaExceeded, match="크레딧"):
+        run_agent(client, spec(fallback_model="fallback-model"), "t", ctx)
+    assert len(client.calls) == 1  # 크레딧 소진은 fallback 모델로도 다시 요청하지 않는다
+    assert [r["kind"] for r in _log(ctx)][-1] == "api_error"
 
 
 def test_execute_applies_defaults_and_catches_exceptions(ws):
