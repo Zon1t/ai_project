@@ -1,5 +1,6 @@
 """티켓 하나를 처리하는 동안 공유하는 실행 정보: 실행 ID, 로그, 토큰 예산, 작업본."""
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,17 +15,19 @@ class BudgetExceeded(RuntimeError):
 
 @dataclass
 class TokenBudget:
-    """티켓당 토큰 상한 (입력+출력, 모든 에이전트 호출 합계)."""
+    """티켓당 토큰 상한 (입력+출력, 모든 에이전트 호출 합계). 공격 라운드가 동시에 더하므로 잠금을 쓴다."""
 
     limit: int = config.TICKET_TOKEN_LIMIT
     used: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def check(self) -> None:
         if self.used >= self.limit:
             raise BudgetExceeded(f"티켓 토큰 상한 초과: {self.used}/{self.limit}")
 
     def add(self, usage: dict) -> None:
-        self.used += int(usage.get("total_tokens", 0))
+        with self._lock:
+            self.used += int(usage.get("total_tokens", 0))
         self.check()
 
 

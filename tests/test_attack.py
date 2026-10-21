@@ -10,8 +10,8 @@ from sr_agent.tools.attack import attack_memory, compare_versions, property_atta
 from sr_agent.tools.code import apply_patch
 from sr_agent.tools.workspace import prepare_workspace
 from sr_agent.workflow.attack import verify_finding
-from sr_agent.workflow.judge import reference_check
-from sr_agent.workflow.state import AttackFinding, JudgeSpec, ReferenceImpl
+from sr_agent.workflow.judge import attack_findings_check, reference_check
+from sr_agent.workflow.state import AttackFinding, AttackReport, JudgeSpec, ReferenceImpl, VerifiedFinding
 
 INTS = {"args": [{"type": "integer", "min": 0, "max": 1000}, {"type": "integer", "min": 0, "max": 1000}]}
 GOOD = "def payable(amount, discount):\n    return max(0, amount - discount)\n"
@@ -177,3 +177,63 @@ def test_s1_incomplete_patches_are_caught(tmp_path: Path, s1_spec, name, passed,
     assert check.passed is passed, check.detail
     if kind:
         assert f"최소 사례({kind})" in check.detail
+
+
+# ---------------- 판정: 공격 입력 재실행 (attack_findings_rechecked) ----------------
+
+def _report(*findings: tuple[str, str, str]) -> AttackReport:
+    """(kind, method, input_json) 목록 → 공격 결과. 확인 여부(verified)와 LLM 기대값은 판정에 쓰이지 않는다."""
+    return AttackReport(findings=[
+        VerifiedFinding(kind=k, method=m, input_json=i, expected_json="0", rule_id="", explanation="")
+        for k, m, i in findings])
+
+
+def test_attack_findings_rechecked_against_reference(bug_ws):
+    """공격 입력 전부를 정답과 비교한다. 분류는 LLM 라벨이 아니라 원본·정답 비교로 정한다."""
+    attack = _report(("regression", "calc.payable", "[100, 300]"),  # LLM은 회귀라 했지만 원본도 틀림 → 미달
+                     ("under_fix", "calc.payable", "[500, 100]"),  # 원본·정답 모두 400 → 차이 없음
+                     ("under_fix", "calc.settle", "[100, 300]"))  # 호출부 경로도 실행
+    check = attack_findings_check(bug_ws, attack, REF, "reference")  # 수정 전 (원본 = 수정본)
+    assert check.passed is False
+    assert {k: v for k, v in check.data.items() if k not in ("failed_inputs", "failed_keys")} == {
+        "inputs": 3, "mismatches": 2, "under_fix": 2, "regression": 0, "skipped": 0}
+    assert "예(미달)" in check.detail and "정답 " not in check.detail.split("예(")[1]  # 정답 출력은 넣지 않음
+    failed = check.data["failed_inputs"]  # 재시도 입력용: 입력·분류·수정본·원본만 (정답 출력 없음)
+    assert [(f["method"], f["kind"]) for f in failed] == [("calc.payable", "under_fix"), ("calc.settle", "under_fix")]
+    assert all(set(f) == {"method", "input", "kind", "patched", "original"} for f in failed)
+
+    assert apply_patch(bug_ws, "calc.payable", GOOD)["applied"]
+    assert attack_findings_check(bug_ws, attack, REF, "reference").passed is True
+
+
+def test_attack_findings_rechecked_classifies_regression(bug_ws):
+    """결함 영역 밖(원본 = 정답)에서 수정본이 다르면 회귀."""
+    patch = "def payable(amount, discount):\n    return 0 if amount >= 1000 else max(0, amount - discount)\n"
+    assert apply_patch(bug_ws, "calc.payable", patch)["applied"]
+    check = attack_findings_check(bug_ws, _report(("under_fix", "calc.payable", "[2000, 100]")), REF, "reference")
+    assert check.passed is False and check.data["regression"] == 1 and "예(회귀)" in check.detail
+
+
+def test_attack_findings_rechecked_skips_and_unevaluated(bug_ws):
+    assert attack_findings_check(bug_ws, None, REF, "reference").passed is None  # 공격 기록 없음
+    no_ref = JudgeSpec(method="calc.payable", strategy=INTS)
+    attack = _report(("under_fix", "calc.payable", "[100, 300]"))
+    assert attack_findings_check(bug_ws, attack, no_ref, "reference").passed is None  # 정답 구현 없음
+    bad = _report(("under_fix", "calc.payable", "not json"), ("under_fix", "calc.payable", '{"x": 1}'),
+                  ("under_fix", "calc.missing", "[1, 2]"))
+    check = attack_findings_check(bug_ws, bad, REF, "reference")
+    assert check.passed is None and check.data == {"inputs": 0, "skipped": 3}
+
+
+def test_attack_findings_rechecked_without_hypothesis_strategy(tmp_path: Path, s1_spec):
+    """E2E처럼 입력 생성 규칙이 없어도, 정답 구현만 있으면 공격 입력으로 불완전 패치를 잡는다."""
+    spec = JudgeSpec(method=s1_spec.method, reference=s1_spec.reference)
+    ws = prepare_workspace("SR-S1", runs_dir=tmp_path)
+    assert apply_patch(ws, "discount.apply_coupon", S1_PATCHES["A_floor_only"])["applied"]
+    # 주문 100,000원에 90,000원 쿠폰 뒤 20,000원 쿠폰(최소 100,000원): 정답 10,000원, A는 0원
+    coupons = [{"type": "FIXED", "value": 90000, "min_order": 100000},
+               {"type": "FIXED", "value": 20000, "min_order": 100000}]
+    attack = _report(("under_fix", "discount.apply_coupons", json.dumps([100000, coupons])))
+    assert reference_check(ws, spec).passed is None
+    check = attack_findings_check(ws, attack, spec, "reference")
+    assert check.passed is False and check.data["under_fix"] == 1, check.detail

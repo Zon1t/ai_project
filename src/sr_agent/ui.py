@@ -26,7 +26,8 @@ CHECK_LABELS = {
     "behavior_preserved": "원본과 출력 완전 동일 (Hypothesis)",
     "deprecated_zero": "지원 종료 API 0건", "style_zero": "팀 스타일 위반 0건", "security_zero": "보안 위반 0건",
     "attack_neutralized": "공격 입력 무력화", "normal_preserved": "정상 입력 원본과 동일 (Hypothesis)",
-    "attack_regressions_preserved": "공격이 찾은 회귀 입력에서 원본과 동일",
+    "attack_findings_rechecked": "공격 입력 재실행: 정답(표준화는 원본)과 동일",
+    "attack_regressions_preserved": "공격이 찾은 회귀 입력에서 원본과 동일",  # 4일차 재생 데이터용
     "hidden_tests_pass": "숨은 정답 테스트 통과 (E2E)",
 }
 _TICKET_ID = re.compile(r"^SR-\d{4}$")
@@ -264,8 +265,14 @@ def event_message(event: dict) -> str | None:
         return f"[{step}]   └ {event.get('tool')}{mark}: {str(event.get('input', ''))[:80]}"
     if kind == "verify" and step == "분석":
         return f"[재현 확인] {'성공' if event.get('ok') else '실패'}: {event.get('detail', '')}"
+    if kind == "round":
+        label = next((lb for n, lb, _ in config.ATTACK_ANGLES if n == event.get("angle")), event.get("angle"))
+        tail = f" (오류: {event['error']})" if event.get("error") else ""
+        return (f"[공격 {event.get('round')}/{event.get('rounds')} {label}] 발견 {event.get('findings', 0)}건, "
+                f"코드로 확인 {event.get('verified', 0)}건{tail}")
     if kind == "verify" and step == "공격":
-        return f"[공격] 발견 {event.get('findings', 0)}건, 코드로 확인 {event.get('verified', 0)}건"
+        rounds = f"라운드 {len(event['rounds'])}/{event.get('planned_rounds')}회, " if "rounds" in event else ""
+        return f"[공격] {rounds}발견 {event.get('findings', 0)}건, 코드로 확인 {event.get('verified', 0)}건"
     if kind == "judge":
         failed = ", ".join(CHECK_LABELS.get(n, n) for n in event.get("failed", []))
         return f"[판정] 시도 {event.get('attempt')}: " + ("통과" if event.get("passed") else f"실패 ({failed})")

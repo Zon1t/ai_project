@@ -114,14 +114,32 @@ class VerifiedFinding(AttackFinding):
     patched: dict | None = None
     verified: bool = False
     check: str = ""  # 무엇을 확인했는지
+    angle: str = ""  # 찾은 공격 라운드의 관점 (config.ATTACK_ANGLES 이름)
+
+
+class AttackRound(BaseModel):
+    """공격 라운드 하나 (관점 하나)의 결과 요약."""
+
+    angle: str
+    label: str
+    summary: str = ""
+    attempts: list[str] = Field(default_factory=list)
+    findings: int = 0
+    verified: int = 0
+    error: str | None = None
 
 
 class AttackReport(BaseModel):
+    """수정 시도 1회의 공격 결과. 여러 라운드의 발견을 합쳐(같은 입력은 하나로) findings에 둔다."""
+
     summary: str = ""
     attempts: list[str] = Field(default_factory=list)
     findings: list[VerifiedFinding] = Field(default_factory=list)
     saved_to_memory: int = 0
-    error: str | None = None
+    error: str | None = None  # 모든 라운드가 실패했을 때만
+    planned_rounds: int = 0  # 이번 시도에 정한 라운드 수 (기본 3, 재시도면 5)
+    rounds: list[AttackRound] = Field(default_factory=list)  # 실제로 실행한 라운드 (조기 종료로 줄 수 있음)
+    escalation: str = ""  # 라운드를 늘린 이유 (판정 실패 이력, 공격 이력)
 
     def verified(self) -> list[VerifiedFinding]:
         return [f for f in self.findings if f.verified]

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from sr_agent import config
-from sr_agent.agents.loop import AgentResult
+from sr_agent.agents.loop import AgentResult, AgentStopped
 from sr_agent.llm import LLMRefusal
 from sr_agent.tools.code import apply_patch
 from sr_agent.tools.testing import write_repro_test
@@ -105,7 +105,11 @@ def test_happy_path(run, tmp_path):
     assert saved.prediction == PREDICTION
     log = [json.loads(line) for line in (tmp_path / "runs" / f"{state.run_ids[0]}.jsonl").read_text(
         encoding="utf-8").splitlines()]
-    assert [r["kind"] for r in log] == ["verify", "verify", "judge", "end"]  # 재현 확인, 공격 확인, 판정
+    # 재현 확인, 공격 라운드 3개(기본), 공격 확인, 판정, 공격 이력 저장(판정 뒤)
+    assert [r["kind"] for r in log] == ["verify", "round", "round", "round", "verify", "judge", "memory", "end"]
+    assert sorted(r["angle"] for r in log if r["kind"] == "round") == ["boundary", "callers", "types"]
+    report = state.attempts[0].attack
+    assert report.planned_rounds == 3 and len(report.rounds) == 3 and report.escalation == ""
     checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
     assert checks["reference_property"] is True
     # 다시 실행하면 끝난 티켓은 그대로 돌려준다 (에이전트 호출 없음)
@@ -181,7 +185,7 @@ def test_standardize_skips_analysis_and_uses_type_judge(run):
     assert agents.inputs["analysis"] == [] and state.analysis is None
     assert json.loads(agents.inputs["fix"][0])["analysis"]["method"] == "calc.payable"
     checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
-    assert checks == {"behavior_preserved": True, "attack_regressions_preserved": None, "deprecated_zero": True,
+    assert checks == {"behavior_preserved": True, "attack_findings_rechecked": None, "deprecated_zero": True,
                       "style_zero": True, "existing_tests_pass": True, "change_scope": True}
     assert state.status == "approval_pending"
 
@@ -204,6 +208,10 @@ def test_attack_findings_verified_saved_and_fed_to_retry(run):
     assert {c.name for c in first.judge.failures()} >= {"reference_property"}
     retry = json.loads(agents.inputs["fix"][1])["previous_attempts"][0]
     assert retry["attack_findings"][0]["kind"] == "regression"
+    found = retry["attack_findings"][0]
+    assert found["original"] == {"ok": True, "value": 400} and found["angle"]
+    rechecked = next(c for c in retry["failed_checks"] if c["name"] == "attack_findings_rechecked")
+    assert {f["kind"] for f in rechecked["data"]["failed_inputs"]} == {"regression"}  # [500,100]: 정답 400, 수정본 0
     assert state.status == "approval_pending"
 
 
@@ -247,3 +255,64 @@ def test_repro_path_fallback_and_feedback_hides_values(bug_ws):
     problem = graph.verify_repro(bug_ws, "repro_tests/test_wrong.py", TICKET)
     assert "assert calc.payable(100, 300) == 5" in problem  # 실패한 단언 코드 줄
     assert "where" not in problem and "0 == 5" not in problem  # 정답 구현의 출력 값은 알려 주지 않는다
+
+
+# ---------------- 공격 라운드 (관점별, 동시 실행) ----------------
+
+def _angles(agents) -> list[str]:
+    return [json.loads(i)["angle"]["name"] for i in agents.inputs["attack"]]
+
+
+def test_attack_rounds_escalate_on_failure_and_stop_early(run):
+    """1회째: 기본 3라운드, 확인된 발견이 있어 그 묶음에서 멈춤. 2회째: 판정 실패 이력 → 5라운드."""
+    agents = FakeAgents(patches=[BAD, GOOD], findings=[UNDER, FAKE])
+    state = run(agents)
+    first, second = (a.attack for a in state.attempts)
+    assert first.planned_rounds == 3 and len(first.rounds) == 3 and first.escalation == ""
+    assert second.planned_rounds == 5 and len(second.rounds) == 5  # 2회째는 확인된 발견이 없어 두 묶음 모두
+    assert second.escalation == "이전 시도 판정 실패"  # 1회째 발견이 공격 이력에 저장돼도 이유가 되지 않음
+    assert _angles(agents)[3:] and set(_angles(agents)[3:]) == {a[0] for a in config.ATTACK_ANGLES}
+    # 라운드마다 같은 발견을 내도 입력이 같으면 하나만 남는다
+    assert len(first.findings) == 2 and {f.angle for f in first.findings} <= {"boundary", "types", "callers"}
+
+
+def test_attack_round_error_does_not_stop_other_rounds(run):
+    agents = FakeAgents()
+    original = agents.__call__
+
+    def flaky(client, spec, user_input, ctx):
+        if spec.name == "attack" and json.loads(user_input)["angle"]["name"] == "types":
+            raise AgentStopped("attack: 12회 안에 최종 결과를 내지 못함")
+        return original(client, spec, user_input, ctx)
+    state = run(flaky)
+    report = state.attempts[0].attack
+    errors = {r.angle: r.error for r in report.rounds}
+    assert errors["types"] and errors["boundary"] is None and report.error is None
+    assert state.status == "approval_pending"
+
+
+def test_attack_rounds_option_fixes_count(run):
+    agents = FakeAgents()
+    state = run(agents, options=graph.RunOptions(attack_rounds=1))
+    report = state.attempts[0].attack
+    assert report.planned_rounds == 1 and _angles(agents) == ["boundary"] and report.escalation == "실행 옵션 1회"
+
+
+def test_plan_rounds():
+    assert attack_mod.plan_rounds(1) == (config.ATTACK_ROUNDS, "")
+    assert attack_mod.plan_rounds(2) == (config.ATTACK_ROUNDS_WITH_HISTORY, "이전 시도 판정 실패")
+    assert attack_mod.plan_rounds(1, override=9)[0] == len(config.ATTACK_ANGLES)
+    assert attack_mod.plan_rounds(3, override=1) == (1, "실행 옵션 1회")
+
+
+def test_memory_saves_only_judge_confirmed_findings(run):
+    """원본과 달라 '확인됨'이지만 정답과는 같은 입력(의도된 수정)은 공격 이력에 남기지 않는다 (S1 실행에서 발견)."""
+    from sr_agent.tools.attack import attack_memory
+
+    intended = AttackFinding(kind="regression", method="calc.payable", input_json="[100, 300]", expected_json="-200",
+                             rule_id="", explanation="원본은 -200이었음")
+    state = run(FakeAgents(findings=[intended]))
+    report = state.attempts[0].attack
+    assert report.findings[0].verified  # 수정본 0 ≠ 원본 -200
+    assert report.saved_to_memory == 0 and state.passed  # 정답도 0 → 판정 통과, 저장 안 함
+    assert attack_memory("search", "defect", {"method": "calc.payable"}) == []

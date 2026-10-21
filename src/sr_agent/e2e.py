@@ -135,6 +135,8 @@ def case_result(state: TicketState, mutant: dict, runs_dir: Path, seconds: float
     predicted = [p["method"] for p in state.prediction[:3]]
     usage = _usage(state, runs_dir)
     passed_at = next((a.number for a in state.attempts if a.judge and a.judge.passed), None)
+    reports = [a.attack for a in state.attempts if a.attack]
+    found = [f.angle for r in reports for f in r.verified()]
     return {
         "ticket_id": state.ticket.ticket_id, "mutant_id": mutant["mutant_id"], "method": true_method,
         "inject_type": mutant["inject_type"], "operator": mutant["operator"],
@@ -144,6 +146,8 @@ def case_result(state: TicketState, mutant: dict, runs_dir: Path, seconds: float
         "agent_location_correct": state.analysis.final_method == true_method if state.analysis else False,
         "agent_method": state.analysis.final_method if state.analysis else None,
         "attempts": len(state.attempts), "passed_at_attempt": passed_at,
+        "attack_rounds": sum(len(r.rounds) for r in reports),
+        "found_angles": ",".join(dict.fromkeys(found)),  # 확인된 발견을 낸 공격 관점
         "tokens": usage.get("total_tokens", 0), "cost_usd": round(_cost(usage), 4),
         "seconds": round(seconds, 1) if seconds is not None else None,
         "reason": state.human_review_reason or "",
@@ -190,6 +194,9 @@ def summarize(rows: list[dict]) -> dict:
         "cost_usd_total": round(sum(r["cost_usd"] for r in rows), 2),
         "seconds_mean": round(sum(timed) / len(timed), 1) if timed else None,
         "by_inject_type": group("inject_type"),
+        "attack_rounds_total": sum(r.get("attack_rounds", 0) for r in rows),
+        "found_by_angle": {a: sum(a in r.get("found_angles", "").split(",") for r in rows)
+                           for a, _, _ in config.ATTACK_ANGLES},
     }
 
 
@@ -198,7 +205,9 @@ def render(tag: str, summary: dict, rows: list[dict], options: RunOptions) -> st
         return "-" if v is None else f"{v:.0%}"
 
     predict = "사용" if options.use_predict else "끔"
-    attack = "사용" if options.use_attack else "끔"
+    attack = "끔" if not options.use_attack else (
+        f"사용 (라운드 {options.attack_rounds}회 고정)" if options.attack_rounds is not None
+        else f"사용 (라운드 기본 {config.ATTACK_ROUNDS}회, 재시도면 {config.ATTACK_ROUNDS_WITH_HISTORY}회)")
     solved = f"{summary['solved']}/{summary['n']} ({pct(summary['solved_rate'])})"
     lines = [
         f"# E2E 배치: {tag} (F7-2)", "",
@@ -214,7 +223,11 @@ def render(tag: str, summary: dict, rows: list[dict], options: RunOptions) -> st
         f"| 통과한 시도 차수 | {', '.join(f'{k}회째 {v}건' for k, v in summary['passed_at_attempt'].items())} |",
         f"| 토큰 합계 / 평균 | {summary['tokens_total']:,} / {summary['tokens_mean']:,} |",
         f"| 비용 합계 | ${summary['cost_usd_total']} |",
-        f"| 평균 소요 시간 | {summary['seconds_mean']}초 |", "",
+        f"| 평균 소요 시간 | {summary['seconds_mean']}초 |",
+        f"| 공격 라운드 합계 | {summary.get('attack_rounds_total', 0)} |",
+        "| 확인된 발견을 낸 관점 (티켓 수) | " + (", ".join(
+            f"{label} {summary.get('found_by_angle', {}).get(name, 0)}" for name, label, _ in config.ATTACK_ANGLES))
+        + " |", "",
         "| 주입 방식 | n | 해결률 |", "|---|---|---|",
         *[f"| {k} | {v['n']} | {pct(v['solved_rate'])} |" for k, v in summary["by_inject_type"].items()], "",
         "## 티켓별", "",

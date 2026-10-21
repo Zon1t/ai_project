@@ -55,7 +55,22 @@ PROPERTY_CASES_REPORTED = 5  # 에이전트에 돌려줄 불일치 사례 수 (�
 JUDGE_PROPERTY_EXAMPLES = 200  # PRD 7.2: Hypothesis 입력 200개
 ATTACK_COLLECTION = "attacks"  # 공격 이력 (Chroma)
 ATTACK_MEMORY_TOP_K = 5
-ATTACK_MAX_TURNS = 25
+ATTACK_MAX_TURNS = 16  # 공격 라운드 하나의 턴(LLM 호출) 상한. 12에서는 S1 라운드 2개가 회귀 확인 전에 상한에 걸림
+ATTACK_ROUNDS = 3  # 수정 시도 1회당 공격 라운드 수 (라운드마다 다른 관점)
+ATTACK_ROUNDS_WITH_HISTORY = 5  # 이 티켓의 이전 시도가 판정에서 실패했을 때 (재시도)
+MAX_FAILED_ATTACK_INPUTS = 5  # 판정이 걸러 낸 공격 입력 중 재시도 입력에 넘길 개수
+ATTACK_PARALLEL = 3  # 동시에 실행하는 라운드 수. 한 묶음에서 확인된 발견이 나오면 다음 묶음은 건너뛴다
+ATTACK_ANGLES = (  # 라운드 순서대로 하나씩. (이름, 화면 표시, 공격 에이전트 지시)
+    ("boundary", "경계값", "근거 규칙이 정한 기준값의 바로 아래·같은 값·바로 위, 0·최댓값 근처를 공격한다."),
+    ("types", "타입·빈 값", "None, 빈 문자열·빈 리스트, 음수, 아주 큰 수, 따옴표·공백·특수문자가 든 문자열처럼 "
+     "함수 계약의 가장자리 값을 공격한다."),
+    ("callers", "호출부 경로", "수정한 함수를 직접 부르지 말고 get_callers로 찾은 상위 함수를 통해 실제 업무 흐름의 "
+     "입력으로 공격한다."),
+    ("combination", "조합·순서", "여러 항목을 섞거나 순서를 바꾸거나 같은 값을 반복한 입력으로 공격한다 "
+     "(예: 여러 쿠폰의 순서, 동명이인, 같은 날짜 반복)."),
+    ("property", "성질 기반", "입력을 조금 바꿨을 때 결과가 따라야 할 성질(단조성, 대칭, 멱등, 합계 보존 등)을 정하고 "
+     "property_attack으로 넓게 확인한다."),
+)
 COPY_IGNORE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".hypothesis", ".coverage", ".ruff_cache")
 SECRET_ENV_MARKERS = ("API_KEY", "SECRET", "TOKEN")  # 자식 프로세스에 넘기지 않는 환경 변수
 
@@ -133,7 +148,9 @@ PRICE_PER_MTOK = {"input": 1.25, "cached": 0.125, "output": 10.0}  # gpt-5 가�
 MODEL_FALLBACK: str | None = None  # 기본 모델 호출이 서버 오류로 실패할 때 쓸 모델. 사용자 결정 전까지 끔
 AGENT_REASONING_EFFORT = {"analysis": "high", "fix": "high", "attack": "medium"}
 AGENT_MAX_TURNS = 20  # 에이전트 루프 반복(LLM 호출) 상한
-TICKET_TOKEN_LIMIT = 800_000  # 티켓당 토큰 상한 (모든 에이전트 합계). S1 실측: 분석 14만 + 시도당(수정+공격) 약 12만
+# 티켓당 토큰 상한 (모든 에이전트 합계). S1 실측: 분석 13만, 수정 2만, 공격 라운드당 약 9만
+# → 공격 3라운드면 약 42만, 재시도 1회 + 5라운드까지 약 90만
+TICKET_TOKEN_LIMIT = 1_500_000
 TOOL_OUTPUT_CHARS = 12000  # 도구 결과를 모델에 돌려줄 때 길이 상한
 LOG_SUMMARY_CHARS = 300  # 실행 로그의 입력·출력 요약 길이
 SEARCH_RULES_TOP_K = {"defect": 5, "standardize": 8, "security": 5}  # 수정 유형별 규칙 검색 개수

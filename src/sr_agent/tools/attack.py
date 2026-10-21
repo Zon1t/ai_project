@@ -9,6 +9,7 @@ LLM의 strict 함수 도구는 형태가 자유로운 JSON을 표현하지 못�
 import hashlib
 import json
 import sys
+import threading
 from pathlib import Path
 
 from sr_agent import config
@@ -17,6 +18,11 @@ from sr_agent.tools.execution import _run, _trim, run_diff
 from sr_agent.tools.workspace import Workspace
 
 ATTACK_KINDS = ("under_fix", "regression")  # 수정 미달 / 회귀
+
+
+def input_key(method: str, value) -> str:
+    """공격 입력을 비교할 때 쓰는 키 (함수 + 키 정렬한 JSON). 같은 입력을 여러 라운드·판정에서 같은 것으로 본다."""
+    return method + " " + json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
 def _loads(value, name: str):
@@ -40,14 +46,32 @@ def compare_versions(
     timeout: float | None = None,
 ) -> dict:
     """여러 버전을 Hypothesis 입력으로 비교한다. 반환은 _property_runner 결과 그대로 또는 {"error"}."""
+    return _run_runner(method, versions, baseline, compare, cwd, timeout,
+                       {"strategy": strategy_spec, "max_examples": max_examples, "seed": config.SEED})
+
+
+def compare_inputs(
+    method: str,
+    inputs: list,
+    versions: dict[str, Path],
+    baseline: str,
+    compare: str,
+    cwd: Path,
+    timeout: float | None = None,
+) -> dict:
+    """정해진 입력 목록으로 여러 버전을 비교한다 (Hypothesis 없음). 반환 cases에 입력마다 모든 버전의 결과."""
+    return _run_runner(method, versions, baseline, compare, cwd, timeout, {"inputs": inputs})
+
+
+def _run_runner(method: str, versions: dict[str, Path], baseline: str, compare: str, cwd: Path,
+                timeout: float | None, extra: dict) -> dict:
     prefix = config.TARGET_PACKAGE + "."
     method = method[len(prefix):] if method.startswith(prefix) else method
     if _split_method(method) is None:
         return {"error": f"method 형식 오류 (모듈.함수): {method!r}"}
     payload = json.dumps({
         "package": config.TARGET_PACKAGE, "method": method,
-        "versions": {k: str(v) for k, v in versions.items()}, "baseline": baseline, "compare": compare,
-        "strategy": strategy_spec, "max_examples": max_examples, "seed": config.SEED,
+        "versions": {k: str(v) for k, v in versions.items()}, "baseline": baseline, "compare": compare, **extra,
     })
     timeout = timeout or config.PROPERTY_TIMEOUT_S
     proc = _run([sys.executable, "-m", "sr_agent.tools._property_runner"], cwd, timeout, stdin=payload)
@@ -100,6 +124,8 @@ def run_diff_json(ws: Workspace, method: str, inputs_json) -> list[dict] | dict:
 
 # ---------------- attack_memory ----------------
 
+_MEMORY_LOCK = threading.Lock()  # 동시에 도는 공격 라운드가 Chroma를 함께 열지 않게
+
 def _collection(chroma_dir: Path | None = None):
     from sr_agent.rag.index import open_client
 
@@ -115,6 +141,11 @@ def attack_memory(op: str, attack_type: str, record=None, chroma_dir: Path | Non
     search의 record: {"method"} (선택, 같은 함수의 공격을 앞에 둔다)
     반환: [{"method", "kind", "input", "expected", "actual", "note", "ticket_id"}]
     """
+    with _MEMORY_LOCK:
+        return _attack_memory(op, attack_type, record, chroma_dir)
+
+
+def _attack_memory(op: str, attack_type: str, record, chroma_dir: Path | None) -> list[dict] | dict:
     if op not in ("search", "save"):
         return {"error": "op는 search 또는 save"}
     if attack_type not in config.SEARCH_RULES_TOP_K:

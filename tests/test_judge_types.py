@@ -3,6 +3,8 @@
 실제 대상 프로젝트와 data/scenarios.json의 판정 명세를 쓴다. 결함 수정(S1)은 test_attack.py, test_judge.py.
 """
 
+import json
+
 import pytest
 
 from sr_agent.run import load_ticket
@@ -92,9 +94,9 @@ def test_standardize_s2(tmp_path, name, failing):
     checks = _checks(result)
     assert result.passed is (not failing)
     assert {k for k, v in checks.items() if v is False} == failing, result.checks
-    assert set(checks) == {"behavior_preserved", "attack_regressions_preserved", "deprecated_zero", "style_zero",
+    assert set(checks) == {"behavior_preserved", "attack_findings_rechecked", "deprecated_zero", "style_zero",
                            "existing_tests_pass", "change_scope"}
-    assert checks["attack_regressions_preserved"] is None  # 공격 기록 없음
+    assert checks["attack_findings_rechecked"] is None  # 공격 기록 없음
 
 
 @pytest.mark.parametrize(("name", "failing"), [
@@ -114,8 +116,9 @@ def test_security_s3(tmp_path, name, failing):
     checks = _checks(result)
     assert result.passed is (not failing)
     assert {k for k, v in checks.items() if v is False} == failing, result.checks
-    assert set(checks) == {"security_zero", "attack_neutralized", "normal_preserved", "existing_tests_pass",
-                           "change_scope"}
+    assert set(checks) == {"security_zero", "attack_neutralized", "normal_preserved", "attack_findings_rechecked",
+                           "existing_tests_pass", "change_scope"}
+    assert checks["attack_findings_rechecked"] is None  # 공격 기록 없음
 
 
 def test_original_s2_fails_every_static_check(tmp_path):
@@ -175,7 +178,7 @@ def test_standardize_attack_regression_inputs_are_judged(tmp_path):
     ws = prepare_workspace("SR-2077", runs_dir=tmp_path)
     apply_patch(ws, ticket.method, code, imports)
     result = judge_ticket(ws, ticket, ticket.method, [], attack)
-    assert _checks(result)["attack_regressions_preserved"] is False and not result.passed
+    assert _checks(result)["attack_findings_rechecked"] is False and not result.passed
 
     keeps = code.replace("    if order_dt is None:\n",
                          "    if order_dt is not None and order_dt.tzinfo is not None:\n"
@@ -184,4 +187,29 @@ def test_standardize_attack_regression_inputs_are_judged(tmp_path):
     ws2 = prepare_workspace("SR-2077b", runs_dir=tmp_path)
     assert apply_patch(ws2, ticket.method, keeps, imports)["applied"]
     result = judge_ticket(ws2, ticket, ticket.method, [], attack)
-    assert _checks(result)["attack_regressions_preserved"] is True and result.passed, result.checks
+    assert _checks(result)["attack_findings_rechecked"] is True and result.passed, result.checks
+
+
+def test_security_attack_inputs_are_judged_against_reference(tmp_path):
+    """S3 공격 에이전트가 낸 입력을 판정이 정답 구현과 비교한다.
+
+    name=None: 원본은 문자열 'None'을 찾고 바인딩한 수정본은 NULL과 비교해 결과가 다르지만, 정답 구현과 같으므로 통과
+    (4일차 S3 실행에서 공격 에이전트가 회귀로 보고한 입력). 동명이인 정렬이 바뀐 패치는 정답과 달라 실패.
+    """
+    from sr_agent.workflow.state import AttackReport, VerifiedFinding
+
+    rows = [{"id": 1, "name": "None", "email": "n@x.com", "phone": "010-5555-5555", "grade": "BASIC"},
+            {"id": 2, "name": "김민수", "email": "a@x.com", "phone": "010-1000-1000", "grade": "BASIC"},
+            {"id": 3, "name": "김민수", "email": "b@x.com", "phone": "010-2000-2000", "grade": "VIP"}]
+    inputs = [[{"$db": {"customers": rows}}, None], [{"$db": {"customers": rows}}, "김민수"]]
+    attack = AttackReport(findings=[
+        VerifiedFinding(kind="regression", method="customer_dao.find_by_name", input_json=json.dumps(i),
+                        expected_json="[]", rule_id="", explanation="") for i in inputs])
+    ticket = load_ticket("SR-2103")
+    for name, passed in (("good", True), ("order_changed", False)):
+        ws = prepare_workspace(f"SR-2103-{name}", runs_dir=tmp_path)
+        assert apply_patch(ws, ticket.method, S3_PATCHES[name])["applied"]
+        check = next(c for c in judge_ticket(ws, ticket, ticket.method, [], attack).checks
+                     if c.name == "attack_findings_rechecked")
+        assert check.passed is passed, check.detail
+        assert check.data["inputs"] == 2 and check.data["mismatches"] == (0 if passed else 1)

@@ -18,6 +18,9 @@
   올바른 결과를 구하고, 수정본이 왜 다른지 찾아 고친다. 대상 함수에 해당하는 업무 규칙은 모두 반영한다.
   "현행 코드가 그렇게 동작한다"거나 "티켓 범위 밖"이라는 이유로 규칙 적용을 미루지 않는다.
 - previous_attempts의 attack_findings는 공격 에이전트가 찾아 코드로 확인한 입력이다. 함께 해결한다.
+- attack_findings_rechecked 실패는 공격 입력에서 수정본이 정답(코드 표준화는 원본)과 다르다는 뜻이다.
+  data.failed_inputs의 입력마다 kind가 미달(under_fix)이면 업무 규칙으로 올바른 결과를 계산해 고치고,
+  회귀(regression)면 원본(original) 결과가 유지되도록 고친다.
 - reason·disagreement·evidence·patch_summary 같은 설명은 모두 한국어로 쓴다.
 
 [유형별 지침]

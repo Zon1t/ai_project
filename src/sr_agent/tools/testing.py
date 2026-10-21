@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import sys
+import threading
 
 from sr_agent import config
 from sr_agent.tools.code import _split_method, find_function, module_path
@@ -47,8 +48,16 @@ def _context_to_test(context: str) -> str:
     return f"{config.TARGET_TEST_SUBDIR}/{module.replace('.', '/')}.py::{func}" if module else context
 
 
+_MEASURE_LOCK = threading.Lock()  # 동시에 도는 공격 라운드가 같은 데이터 파일을 함께 쓰지 않게
+
+
 def _measure(ws: Workspace, timeout: float) -> tuple[str, str | None]:
     """작업본 전체 테스트를 coverage로 돌린다. 반환: (데이터 파일 경로, 오류). 같은 내용이면 재사용."""
+    with _MEASURE_LOCK:
+        return _measure_locked(ws, timeout)
+
+
+def _measure_locked(ws: Workspace, timeout: float) -> tuple[str, str | None]:
     digest = hashlib.sha256(json.dumps(hash_tree(ws.work), sort_keys=True).encode()).hexdigest()[:16]
     ws.reports.mkdir(exist_ok=True)
     data = ws.reports / f"coverage_{digest}.data"

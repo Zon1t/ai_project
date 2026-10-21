@@ -64,16 +64,19 @@ def fix_input(ticket: Ticket, analysis: AnalysisOutput | None, previous: list[Fi
         payload["previous_attempts"] = [
             {"number": a.number, "diff": a.diff[:2000], "error": a.error,
              "failed_checks": [c.model_dump() for c in a.judge.failures()] if a.judge else [],
-             "attack_findings": [{"kind": f.kind, "input": f.input_json, "expected": f.expected_json,
-                                  "patched": f.patched, "rule_id": f.rule_id, "explanation": f.explanation}
+             "attack_findings": [{"kind": f.kind, "angle": f.angle, "method": f.method, "input": f.input_json,
+                                  "expected": f.expected_json, "patched": f.patched, "original": f.original,
+                                  "rule_id": f.rule_id, "explanation": f.explanation}
                                  for f in a.attack.verified()] if a.attack else []}
             for a in previous
         ]
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def attack_input(ticket: Ticket, analysis: AnalysisOutput | None, fix: FixOutput | None, diff: str) -> str:
-    """공격 에이전트 입력: 티켓, 결함 위치, 패치 설명, 근거 규칙 본문, diff. 정답 구현(판정 명세)은 넣지 않는다.
+def attack_input(ticket: Ticket, analysis: AnalysisOutput | None, fix: FixOutput | None, diff: str,
+                 angle: tuple[str, str, str] | None = None, round_no: int = 1, rounds: int = 1) -> str:
+    """공격 에이전트 입력: 티켓, 결함 위치, 패치 설명, 근거 규칙 본문, diff, 이번 라운드의 관점.
+    정답 구현(판정 명세)은 넣지 않는다.
 
     근거 규칙은 수정 에이전트가 인용한 것과 분석 에이전트가 근거로 찾은 것을 모두 넣는다
     (수정이 규칙 일부만 반영했을 때 나머지 규칙으로 미달을 찾을 수 있게).
@@ -91,4 +94,7 @@ def attack_input(ticket: Ticket, analysis: AnalysisOutput | None, fix: FixOutput
                   for rid in cited if rid in rules],
         "diff": diff[:4000],
     }
+    if angle:
+        payload["angle"] = {"name": angle[0], "label": angle[1], "instruction": angle[2],
+                            "round": f"{round_no}/{rounds}"}
     return json.dumps(payload, ensure_ascii=False, indent=2)

@@ -239,7 +239,13 @@ def tab_attack(state: TicketState) -> None:
     for att in reversed(state.attempts):
         with st.expander(f"시도 {att.number}", expanded=att is state.attempts[-1]):
             if att.attack:
-                st.markdown(att.attack.summary or "")
+                if att.attack.rounds:
+                    more = f" · 늘린 이유: {att.attack.escalation}" if att.attack.escalation else ""
+                    st.caption(f"공격 라운드 {len(att.attack.rounds)}/{att.attack.planned_rounds}회{more}")
+                    st.table([{"관점": r.label, "발견": r.findings, "확인": r.verified, "요약": r.error or r.summary}
+                              for r in att.attack.rounds])
+                else:
+                    st.markdown(att.attack.summary or "")
                 if att.attack.error:
                     st.error(att.attack.error)
                 for label in ("under_fix", "regression"):

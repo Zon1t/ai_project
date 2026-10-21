@@ -3,6 +3,7 @@
 사용: python -m sr_agent.tools._property_runner   (stdin JSON → stdout JSON)
 stdin: {"package", "method", "versions": {이름: src 경로}, "baseline": 버전, "compare": 버전,
         "strategy": spec, "max_examples", "seed"}
+       strategy 대신 "inputs": [입력...]이면 Hypothesis 없이 그 입력만 실행한다 (판정이 공격 입력을 다시 실행할 때).
 - versions의 각 src에서 패키지를 따로 import한다 (sys.modules를 바꿔 가며). 대상 코드에 함수 안 import가 없어야 한다.
 - baseline과 compare의 결과가 다른 입력을 찾고, Hypothesis가 최소 사례로 줄인다.
 - 모든 버전의 결과를 입력마다 기록해 돌려준다 (판정에서 원본·수정본·참조를 함께 보기 위해).
@@ -101,18 +102,30 @@ def run(req: dict) -> dict:
     package = req["package"]
     funcs = load_versions(package, req["method"], req["versions"])
     baseline, compare = req["baseline"], req["compare"]
-    strategy = input_strategy(req["strategy"])
     cases: list[dict] = []
     stats = {"examples": 0, "mismatches": 0, "under_fix": 0, "regression": 0}
     # baseline이 참조 구현이면 불일치를 분류한다: 원본이 참조와 같았던 입력 = 회귀, 원본도 달랐던 입력 = 미달
     classify = baseline != "original" and "original" in funcs
 
-    def evaluate(raw: dict) -> dict:
+    def evaluate(raw) -> dict:
         encoded = json.loads(json.dumps(raw))  # 전략 값은 이미 JSON 표기 ($date 등)
         case = {"input": encoded, "results": {n: _call(f, encoded, package) for n, f in funcs.items()}}
         if classify and case["results"][baseline] != case["results"][compare]:
             case["kind"] = "regression" if case["results"]["original"] == case["results"][baseline] else "under_fix"
         return case
+
+    if req.get("inputs") is not None:  # 정해진 입력만 실행 (Hypothesis 없음). 모든 케이스를 돌려준다
+        for raw in req["inputs"]:
+            case = evaluate(raw)
+            cases.append(case)
+            stats["examples"] += 1
+            if case["results"][baseline] != case["results"][compare]:
+                stats["mismatches"] += 1
+                if classify:
+                    stats[case["kind"]] += 1
+        return {**stats, "minimal": None, "cases": cases}
+
+    strategy = input_strategy(req["strategy"])
 
     common = {"database": None, "deadline": None, "max_examples": req["max_examples"],
               "suppress_health_check": list(HealthCheck), "derandomize": False}

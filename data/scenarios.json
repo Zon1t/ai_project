@@ -256,6 +256,10 @@
           }
         ]
       },
+      "reference": {
+        "method": "customer_dao.find_by_name",
+        "code": "def find_by_name(conn, name):\n    sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"  # SEC-SQL-01\n    return db.query_all(conn, sql, (name,))  # SEC-LOG-03: SQL 전문 로그 없음\n"
+      },
       "attack_inputs": [
         {
           "input": [

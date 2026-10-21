@@ -23,7 +23,7 @@ from sr_agent.tools.code import read_method
 from sr_agent.tools.execution import run_tests
 from sr_agent.tools.predict import predict_fault_location
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
-from sr_agent.workflow.attack import run_attack
+from sr_agent.workflow.attack import run_attack, save_confirmed
 from sr_agent.workflow.judge import judge_ticket
 from sr_agent.workflow.reference import build_reference
 from sr_agent.workflow.state import FixAttempt, Ticket, TicketState
@@ -37,6 +37,7 @@ class RunOptions:
 
     use_predict: bool = True  # 분석 에이전트에 predict_fault_location 제공
     use_attack: bool = True  # 공격 단계 실행
+    attack_rounds: int | None = None  # 공격 라운드 수 고정 (None이면 기본 3, 재시도면 5)
 
 
 def _analysis_spec(options: RunOptions):
@@ -142,14 +143,19 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
             attempt.error = str(e)
         attempt.diff = _work_diff(ctx.ws)
         if options.use_attack:
-            progress("공격 에이전트 실행")
-            attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx)
-            progress(f"공격 발견 {len(attempt.attack.verified())}건 (확인됨) → 판정 (코드)")
+            progress("공격 에이전트 실행 (관점별 라운드)")
+            attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx, options.attack_rounds)
+            report = attempt.attack
+            more = f", 늘린 이유: {report.escalation}" if report.escalation else ""
+            progress(f"공격 라운드 {len(report.rounds)}/{report.planned_rounds}회{more} → "
+                     f"발견 {len(report.verified())}건 (확인됨) → 판정 (코드)")
         else:
             progress("공격 단계 생략 (Ablation) → 판정 (코드)")
         attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro, attempt.attack)
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
+        if attempt.attack:
+            save_confirmed(state.ticket, attempt.attack, attempt.judge, ctx)  # 판정이 확인한 공격만 이력에
         state.attempts.append(attempt)
         state.save(ctx.ws.state_path)
     if not state.passed:

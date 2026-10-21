@@ -23,7 +23,8 @@ def test_good_patch_passes(bug_ws):
     result = judge_defect(bug_ws, "calc.payable", ["repro_tests/test_never_negative.py"])
     assert result.passed
     assert _checks(result) == {"repro_original_fails": True, "repro_patched_passes": True,
-                               "existing_tests_pass": True, "change_scope": True, "reference_property": None}
+                               "existing_tests_pass": True, "change_scope": True, "reference_property": None,
+                               "attack_findings_rechecked": None}
 
 
 def test_no_patch_fails(bug_ws):
