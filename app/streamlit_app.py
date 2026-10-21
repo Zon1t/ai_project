@@ -34,21 +34,14 @@ EVIDENCE_KINDS = {"model": "모델 예측", "history": "장애 이력", "caller"
 
 GUIDE_PATH = Path(__file__).resolve().parents[1] / "docs" / "user_guide.md"
 HELP = {  # 영역 제목 옆 ? 아이콘 설명 (자세한 내용은 사용 설명서 docs/user_guide.md)
-    "mode": "재생: 미리 실행한 결과를 API 호출 없이 봅니다. 실시간: 티켓을 실제로 처리하고 새 티켓을 등록합니다.",
-    "stages": "분석 › 수정 › 공격 › 판정 › 승인 순서로 진행합니다. 코드 표준화·보안은 진단이 위치를 알려 주므로 "
-              "분석을 생략합니다. 판정에 실패하면 수정부터 다시 합니다 (최대 3회).",
+    "mode": "재생: 미리 실행해 저장한 결과(data/replay)를 API 호출 없이 다시 보여 줍니다. 진행 과정을 같은 순서로 "
+            "재생하고, 승인·반려는 복사본에만 기록돼 '기록 초기화'로 되돌릴 수 있습니다.  \n"
+            "실시간: 티켓을 실제로 처리합니다 (OpenAI API, 티켓당 3~7분·$0.4~1). 새 티켓 등록도 여기서 합니다. "
+            "중간에 멈춰도 끝난 단계부터 이어서 실행합니다.",
     "verdict": "판정은 LLM이 아니라 코드가 유형별 통과 조건을 검사해 정합니다. 실패한 조건은 재시도하는 수정 "
                "에이전트에 전달됩니다. 회색(미평가)은 비교할 기준이 없어 자동으로 확인하지 못한 조건입니다.",
-    "process": "단계별 소요 시간, LLM 호출(턴), 도구 호출 수와 결과입니다. 원본 실행 로그는 토글을 켜야 보입니다.",
     "prediction": "결함 위치 예측 모델(XGBoost Ranker)의 Top-3입니다. 티켓-코드 유사도, 스택트레이스, "
                   "함수 길이·복잡도로 점수를 매기며 참고 자료일 뿐입니다. 최종 위치는 오른쪽 에이전트 판단을 따릅니다.",
-    "decision": "분석 에이전트가 예측·호출 관계·과거 이력·재현 테스트로 정한 원인 함수입니다. 모델 1위와 다르게 고르면 "
-                "그 이유를 남깁니다.",
-    "rules": "수정 근거로 인용한 사내 규칙입니다 (SEC 보안 · DEP 지원 종료 API · STY 팀 스타일 · BIZ 업무 규칙).",
-    "history": "비슷했던 과거 장애와 그때의 조치입니다 (학습용 이력만 검색).",
-    "evidence": "분석 에이전트가 원인 판단에 쓴 근거입니다. 확인할 수 있는 식별자(규칙 ID, 이력 ID, 함수, "
-                "테스트)만 적습니다.",
-    "diff": "작업본(runs/<티켓ID>/work/)에서 바뀐 코드입니다. 대상 함수와 같은 파일의 import만 바꿀 수 있습니다.",
     "attack": "공격 에이전트가 관점(경계값·빈 값·호출 경로·조합·성질)별로 입력을 만들어 고친 코드를 공격합니다. "
               "미달 = 덜 고침, 회귀 = 원래 맞던 동작을 깨뜨림. 맞고 틀림은 판정이 코드로 다시 실행해 정합니다.",
     "approval": "판정을 통과한 티켓만 승인할 수 있습니다. 승인하면 마지막 패치가 runs/<티켓ID>/approved.diff로 "
@@ -248,9 +241,8 @@ def verdict(state: TicketState, summary: dict) -> None:
     k = ui.kpis(state)
     evaluated = [c for c in checks if c.passed is not None]
     with st.container(horizontal=True):
-        st.metric("판정 조건", f"{sum(c.passed for c in evaluated)}/{len(evaluated)}", border=True,
-                  help="코드로 검사한 통과 조건 수 (LLM이 판단하지 않음)")
-        st.metric("재시도", f"{k['retries']}회", border=True, help=f"수정 재시도 상한 {config.MAX_PATCH_RETRIES}회")
+        st.metric("판정 조건", f"{sum(c.passed for c in evaluated)}/{len(evaluated)}", border=True)
+        st.metric("재시도", f"{k['retries']}회", border=True)
         st.metric("기존 테스트", "-" if k["tests_passed"] is None else f"{k['tests_passed']:,}개 통과", border=True)
         st.metric("공격 발견", f"미달 {k['attack_under_fix']} · 회귀 {k['attack_regression']}", border=True,
                   help=f"공격 에이전트가 찾아 원본과 다르게 동작함을 코드로 확인한 수 (모든 시도 합계). 정답 구현과 "
@@ -282,7 +274,6 @@ def process(events: list[dict], summary: dict) -> None:
     tools = sum(s["tools"] for s in segs)
     label = f"처리 과정 · {ui.format_duration(summary['seconds'])} · LLM {turns}턴 · 도구 {tools}회"
     with st.expander(label, expanded=st.session_state.pop("show_process", False), icon=":material/timeline:"):
-        st.caption(HELP["process"])
         st.dataframe(
             [{"단계": s["stage"], "시도": s["attempt"], "소요": ui.format_duration(s["seconds"]),
               "LLM 턴": s["turns"], "도구 호출": s["tools"], "결과": s["result"]} for s in segs],
@@ -313,7 +304,6 @@ def tab_location(state: TicketState) -> None:
                   "주요 근거": (p.get("reasons") or [{}])[0].get("label", "-"),
                   "최종 선택": p["method"] == final} for i, p in enumerate(state.prediction, 1)],
                 hide_index=True, alt="결함 위치 예측 Top-3",
-                column_config={"최종 선택": st.column_config.CheckboxColumn(help="에이전트가 고른 최종 결함 위치")},
             )
             with st.expander("SHAP 근거 상세", icon=":material/insights:"):
                 for i, p in enumerate(state.prediction, 1):
@@ -321,7 +311,7 @@ def tab_location(state: TicketState) -> None:
                     st.dataframe([{"근거": r["label"], "값": r["value"], "기여도": round(r["contribution"], 3)}
                                   for r in p.get("reasons", [])], hide_index=True, alt=f"{p['method']} SHAP 근거")
     with right:
-        st.markdown("##### 에이전트 최종 판단", help=HELP["decision"])
+        st.markdown("##### 에이전트 최종 판단")
         if a is None:
             st.caption("분석 결과가 없습니다.")
             return
@@ -340,7 +330,7 @@ def tab_evidence(state: TicketState) -> None:
     rules = _rules()
     left, right = st.columns(2, gap="large")
     with left:
-        st.markdown("##### 인용한 사내 규칙", help=HELP["rules"])
+        st.markdown("##### 인용한 사내 규칙")
         cited = ui.cited_rule_ids(state)
         if not cited:
             st.caption("인용한 규칙이 없습니다.")
@@ -353,7 +343,7 @@ def tab_evidence(state: TicketState) -> None:
                 st.markdown(r["description"])
                 st.code(r["good_example"], language="python")
     with right:
-        st.markdown("##### 인용한 장애·조치 이력", help=HELP["history"])
+        st.markdown("##### 인용한 장애·조치 이력")
         details = ui.history_details(ui.cited_history_ids(state))
         if not details:
             st.caption("인용한 이력이 없거나 RAG 색인이 없습니다.")
@@ -362,7 +352,7 @@ def tab_evidence(state: TicketState) -> None:
                 st.markdown(h["ticket"])
                 st.markdown(f"**원인** {h['root_cause']}  \n**조치** {h['fix_summary']}")
     if state.analysis and state.analysis.evidence:
-        st.markdown("##### 분석 근거", help=HELP["evidence"])
+        st.markdown("##### 분석 근거")
         st.dataframe([{"종류": EVIDENCE_KINDS.get(e.kind, e.kind), "대상": e.ref, "내용": e.note}
                       for e in state.analysis.evidence], hide_index=True, alt="분석 근거 목록",
                      column_config={"내용": st.column_config.TextColumn(width="large")})
@@ -392,7 +382,6 @@ def tab_diff(state: TicketState) -> None:
         st.markdown(att.fix.patch_summary)
     if att.error:
         st.error(att.error)
-    st.markdown("##### 바뀐 코드", help=HELP["diff"])
     st.code(att.diff or "(변경 없음)", language="diff", line_numbers=True)
 
 
@@ -410,13 +399,10 @@ def tab_attack(state: TicketState) -> None:
     verified = rep.verified()
     st.markdown("##### 공격 요약", help=HELP["attack"])
     with st.container(horizontal=True):
-        st.metric("라운드", f"{len(rep.rounds)}/{rep.planned_rounds}회" if rep.rounds else "-", border=True,
-                  help="관점 하나를 맡은 공격 실행 수. 확인된 발견이 나오면 남은 라운드를 건너뜁니다.")
+        st.metric("라운드", f"{len(rep.rounds)}/{rep.planned_rounds}회" if rep.rounds else "-", border=True)
         for kind in ("under_fix", "regression"):
-            st.metric(KIND_LABELS[kind], f"{sum(f.kind == kind for f in verified)}건", border=True,
-                      help="코드로 다시 실행해 확인한 수")
-        st.metric("공격 이력 저장", f"{rep.saved_to_memory}건", border=True,
-                  help="판정이 정답과 다르다고 확인한 입력만 저장합니다.")
+            st.metric(KIND_LABELS[kind], f"{sum(f.kind == kind for f in verified)}건", border=True)
+        st.metric("공격 이력 저장", f"{rep.saved_to_memory}건", border=True)
     if rep.escalation:
         st.caption(f":material/trending_up: 라운드를 늘린 이유: {rep.escalation}")
 
@@ -427,13 +413,13 @@ def tab_attack(state: TicketState) -> None:
                             f"미달 {c.data.get('under_fix', 0)} · 회귀 {c.data.get('regression', 0)}")
 
     if rep.findings:
-        st.markdown("##### 발견한 입력", help="확인 = 코드로 다시 실행해 원본과 다르게 동작함을 확인한 입력")
+        st.markdown("##### 발견한 입력")
         st.dataframe(
             [{"분류": KIND_LABELS[f.kind], "확인": f.verified, "입력": f.input_json, "기대": f.expected_json,
               "수정본": str(f.patched), "원본": str(f.original), "근거": f.rule_id, "설명": f.explanation}
              for f in rep.findings],
             hide_index=True, alt="공격 발견 목록",
-            column_config={"확인": st.column_config.CheckboxColumn(help="코드로 다시 실행해 확인"),
+            column_config={"확인": st.column_config.CheckboxColumn(),
                            "설명": st.column_config.TextColumn(width="large")},
         )
     else:
@@ -489,12 +475,10 @@ def main() -> None:
         events = ui.load_events(state) if state else []
     header(ticket, state)
     stage_slot = st.empty()
-    stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)),
-                         help=HELP["stages"])
+    stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)))
     if run_controls(replay, ticket, events, stage_slot):
         st.rerun()
-    stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)),
-                         help=HELP["stages"])
+    stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)))
     if state is None:
         st.info("아직 실행하지 않은 티켓입니다. 실행을 누르세요.", icon=":material/info:")
         return

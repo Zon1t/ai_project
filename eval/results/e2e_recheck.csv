@@ -1,0 +1,5 @@
+ticket_id,mutant_id,method,inject_type,operator,status,solved,hidden_tests_pass,regression_leak,cited,cited_ids,cited_fields,model_top3_hit,model_rank,agent_location_correct,agent_method,attempts,passed_at_attempt,attack_rounds,found_angles,tokens,cost_usd,seconds,reason
+E2E-2adc72a0-A,MUT-2adc72a0,review.can_write_review,ast,RSD,approval_pending,True,True,False,True,"HIS-5fa7765e,HIS-21900256,HIS-7ed50cf9",True,True,1,True,review.can_write_review,1,1,3,"boundary,types",308780,0.3459,,
+E2E-77a7bda9-A,MUT-77a7bda9,settlement.settle_order,llm,LLM,approval_pending,True,True,False,True,"BIZ-SET-02,BIZ-AMT-02,HIS-fc8acd64",True,False,,True,settlement.settle_order,1,1,3,,574633,0.5585,,
+E2E-bee37ca8-A,MUT-bee37ca8,shipping.decide_return_fee_payer,ast,RSD,approval_pending,True,True,False,True,"HIS-ff39c268,HIS-0a6f7299",True,True,1,True,shipping.decide_return_fee_payer,1,1,3,,230094,0.286,,
+E2E-eece0961-A,MUT-eece0961,tax.split_mixed_items,llm,LLM,approval_pending,True,False,True,True,"BIZ-AMT-03,HIS-e23b1247",True,True,1,True,tax.split_mixed_items,1,1,3,"boundary,callers",412465,0.4458,354.2,

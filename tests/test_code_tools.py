@@ -133,6 +133,18 @@ def test_apply_patch_imports(bug_ws):
     assert not result["applied"] and "import 문이 아님" in result["error"]
 
 
+def test_apply_patch_does_not_duplicate_existing_imports(bug_ws):
+    """재시도가 이미 넣은 import를 다시 요청해도 한 줄만 남는다 (S2 재시도 패치에서 두 줄이 되던 문제)."""
+    from sr_agent.tools.code import apply_patch
+
+    calc = bug_ws.work / "src/order_settlement/calc.py"
+    code = "def payable(amount, discount):\n    return math.floor(amount)\n"
+    twice = {"add": ["import math", "import math"], "remove": []}
+    assert apply_patch(bug_ws, "calc.payable", code, twice)["applied"]
+    assert apply_patch(bug_ws, "calc.payable", code, {"add": ["import math"], "remove": []})["applied"]
+    assert calc.read_text(encoding="utf-8").count("import math") == 1
+
+
 def test_apply_patch_class_method_keeps_indent(ws):
     from sr_agent.tools.code import apply_patch, read_method
 

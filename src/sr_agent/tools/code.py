@@ -217,10 +217,16 @@ def _apply_imports(text: str, imports: dict | None) -> str:
         removals.append(node)
     for node in sorted(removals, key=lambda n: -n.lineno):
         del lines[node.lineno - 1:node.end_lineno]
-    adds = [ast.unparse(_parse_import(stmt)) + "\n" for stmt in imports.get("add") or []]
+    tree = ast.parse("".join(lines))
+    top_imports = [n for n in tree.body if isinstance(n, ast.Import | ast.ImportFrom)]
+    present = {ast.unparse(n) for n in top_imports}
+    adds = []  # 이미 있는 import는 다시 넣지 않는다 (재시도가 같은 import를 또 요청해 두 줄이 되던 문제)
+    for stmt in imports.get("add") or []:
+        line = ast.unparse(_parse_import(stmt))
+        if line not in present:
+            present.add(line)
+            adds.append(line + "\n")
     if adds:
-        tree = ast.parse("".join(lines))
-        top_imports = [n for n in tree.body if isinstance(n, ast.Import | ast.ImportFrom)]
         if top_imports:
             at = top_imports[-1].end_lineno
         else:

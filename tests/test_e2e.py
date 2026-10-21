@@ -142,3 +142,9 @@ def test_hidden_result_uses_saved_or_legacy_check(tmp_path):
     saved.parent.mkdir(parents=True)
     saved.write_text(json.dumps({"passed": False, "detail": "x"}), encoding="utf-8")
     assert hidden_result(_state(), ticket, mutant, tmp_path) == {"passed": False, "detail": "x"}
+
+
+def test_holdout_cases_only_selects_by_method_or_mutant():
+    first, second = holdout_cases("A")[:2]
+    picked = holdout_cases("A", only=[first[1]["method"], second[1]["mutant_id"]])
+    assert {m["mutant_id"] for _, m in picked} == {first[1]["mutant_id"], second[1]["mutant_id"]}

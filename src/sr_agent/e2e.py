@@ -106,12 +106,15 @@ def prepare(ticket: Ticket, mutant: dict, runs_dir: Path) -> Ticket:
     return ticket.model_copy(update={"judge": spec})
 
 
-def holdout_cases(reporter: str = "A", limit: int | None = None) -> list[tuple[Ticket, dict]]:
-    """홀드아웃 결함마다 (티켓, 결함). 결함 ID 순."""
+def holdout_cases(reporter: str = "A", limit: int | None = None,
+                  only: list[str] | None = None) -> list[tuple[Ticket, dict]]:
+    """홀드아웃 결함마다 (티켓, 결함). 결함 ID 순. only: 결함 함수(모듈.함수)나 결함 ID로 골라 돌린다."""
     mutants = {m["mutant_id"]: m for m in load_jsonl(config.MUTANTS_PATH)}
     rows = [r for r in load_tickets() if r["split"] == "holdout" and r["ticket_id"].endswith(f"-{reporter}")]
     cases = [(build_ticket(mutants[r["mutant_id"]], r, reporter), mutants[r["mutant_id"]])
              for r in sorted(rows, key=lambda r: r["mutant_id"])]
+    if only:
+        cases = [(t, m) for t, m in cases if m["method"] in only or m["mutant_id"] in only]
     return cases[:limit] if limit else cases
 
 
@@ -303,7 +306,8 @@ def render(tag: str, summary: dict, rows: list[dict], options: RunOptions) -> st
 
 
 def run_e2e(tag: str = "full", options: RunOptions | None = None, reporter: str = "A", limit: int | None = None,
-            workers: int = 1, restart: bool = False, client=None, runs_tag: str | None = None) -> dict:
+            workers: int = 1, restart: bool = False, client=None, runs_tag: str | None = None,
+            only: list[str] | None = None) -> dict:
     """홀드아웃 배치를 돌리고 결과 파일을 쓴다. 작업본은 runs/e2e/<runs_tag>/ (조건이 같으면 이어서 쓴다)."""
     options = options or RunOptions()
     if client is None:
@@ -311,7 +315,7 @@ def run_e2e(tag: str = "full", options: RunOptions | None = None, reporter: str 
 
         client = llm.get_client()
     runs_dir = config.RUNS_DIR / "e2e" / (runs_tag or tag)
-    cases = holdout_cases(reporter, limit)
+    cases = holdout_cases(reporter, limit, only)
     memory = runs_dir / "attack_memory"  # 조건마다 따로 (다른 조건·이전 실행의 공격이 섞이지 않게)
     if restart and memory.exists():
         remove_tree(memory)

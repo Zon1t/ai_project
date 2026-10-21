@@ -6,6 +6,7 @@
   python -m eval.run_e2e --split holdout --no-predict    # Ablation: 예측 도구 끔 (태그 no_predict)
   python -m eval.run_e2e --split holdout --no-attack     # Ablation: 공격 단계 끔 (태그 no_attack)
   python -m eval.run_e2e --split holdout --attack-rounds 1   # 공격 라운드 수 고정 (태그 r1)
+  python -m eval.run_e2e --only shipping.decide_return_fee_payer --tag recheck   # 고른 결함만
 결과: eval/results/e2e_<태그>.{md,csv,json}, 작업본: runs/e2e/<태그>/
 """
 
@@ -29,6 +30,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1, help="동시에 처리할 티켓 수")
     parser.add_argument("--tag", default=None, help="결과 이름 (기본: 조건으로 정함)")
     parser.add_argument("--restart", action="store_true", help="끝난 티켓도 처음부터 다시")
+    parser.add_argument("--only", default=None,
+                        help="쉼표로 구분한 결함 함수(모듈.함수) 또는 결함 ID만 실행 (실패 티켓 재확인용)")
     args = parser.parse_args()
 
     from dotenv import load_dotenv
@@ -41,7 +44,9 @@ def main() -> None:
         off.append(f"r{args.attack_rounds}")
     condition = args.tag or ("_".join(off) if off else "full")
     tag = condition + (f"_n{args.limit}" if args.limit else "")
-    summary = run_e2e(tag, options, args.reporter, args.limit, args.workers, args.restart, runs_tag=condition)
+    only = [x.strip() for x in args.only.split(",") if x.strip()] if args.only else None
+    summary = run_e2e(tag, options, args.reporter, args.limit, args.workers, args.restart, runs_tag=condition,
+                      only=only)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"결과: {config.EVAL_RESULTS_DIR / f'e2e_{tag}.md'}")
 
