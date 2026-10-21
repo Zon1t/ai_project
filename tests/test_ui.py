@@ -268,3 +268,81 @@ def test_app_guide_dialog_and_unevaluated_notice(dirs):
     next(b for b in at.button if b.label == "사용 설명서").click().run()
     assert not at.exception
     assert any("RedFix가 하는 일" in m.value for m in at.markdown)
+
+
+def test_apply_diff_and_code_versions(dirs):
+    """재생 데이터처럼 diff만 있어도 원본 파일에 적용해 대상 함수의 수정 전/후 전체 코드를 만든다."""
+    import difflib
+
+    rel = "src/order_settlement/calc.py"
+    before = "import math\n\n\ndef add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+    after = ("import math\nimport os\n\n\ndef add(a, b):\n    return max(0, a + b)\n\n\n"
+             "def sub(a, b):\n    return a - b\n")
+    diff = "".join(difflib.unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True),
+                                        fromfile=f"a/{rel}", tofile=f"b/{rel}", n=2))
+    assert ui.apply_diff(before, diff, rel) == after
+    assert ui.apply_diff(before.replace("a + b", "a * b"), diff, rel) is None  # 다른 원본에서 만든 diff
+
+    original = config.RUNS_DIR / "SR-2041" / config.ORIGINAL_DIRNAME / rel
+    original.parent.mkdir(parents=True)
+    original.write_text(before, encoding="utf-8")
+    attempt = FixAttempt(number=1, fix=FixOutput(method="calc.add", patch_summary="", rule_ids=[], history_ids=[]),
+                         diff=diff)
+    state = TicketState(ticket=TICKET, attempts=[attempt])
+    v = ui.code_versions(state, attempt)
+    assert v["before"] == "def add(a, b):\n    return a + b"
+    assert v["after"] == "def add(a, b):\n    return max(0, a + b)"
+    assert v["imports"] == {"added": ["import os"], "removed": []}
+    assert ui.changed_line_numbers(v["before"], v["after"]) == [2]
+    assert ui.current_code(state.model_copy(update={"analysis": None, "ticket": TICKET.model_copy(
+        update={"method": "calc.sub"})})) == "def sub(a, b):\n    return a - b"
+    stored = attempt.model_copy(update={"before_code": "def add(a, b): ...", "after_code": "def add(a, b): pass"})
+    assert ui.code_versions(state, stored)["before"] == "def add(a, b): ..."  # 상태에 저장된 코드가 우선
+
+
+def test_app_shows_before_after_code(dirs):
+    attempt = _attempt(1, True).model_copy(update={"before_code": "def payable(a, d):\n    return a - d",
+                                                   "after_code": "def payable(a, d):\n    return max(0, a - d)"})
+    at = _replay_app(dirs, _state(attempts=[attempt]))
+    codes = [c.value for c in at.code]
+    assert "def payable(a, d):\n    return a - d" in codes and "def payable(a, d):\n    return max(0, a - d)" in codes
+    at.segmented_control(key="view-SR-2041-1").set_value("바뀐 줄 표시").run()
+    assert not at.exception
+    assert any("+    return max(0, a - d)" in c.value for c in at.code)
+
+
+def test_app_demo_case_flow(dirs, monkeypatch):
+    """실시간 모드: 시연 케이스를 불러와 선택하고, 확인할 것 안내를 보여 준다 (결함 작업본 준비는 가짜로)."""
+    from sr_agent import demo
+
+    fake = Ticket(ticket_id="DEMO-D", type="security", title="이메일 조회 SQL", body="본문",
+                  method="customer_dao.find_by_email", scenario="시연 D", demo_case="D")
+    monkeypatch.setattr(demo, "prepare_demo", lambda case_id, runs_dir=None, reset=False: fake)
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    at.sidebar.segmented_control[0].set_value("실시간").run()
+    next(b for b in at.sidebar.button if b.label == "불러오기").click().run()
+    assert not at.exception
+    assert at.sidebar.radio[0].value == "DEMO-D"
+    assert any(e.label.startswith("시연 케이스 D") for e in at.expander)
+
+
+def test_app_replay_demo_answer_check(dirs):
+    """재생 데이터의 정답 확인 결과는 버튼을 누른 뒤에만 보이고, 담당자 판단과의 일치를 알려 준다."""
+    ticket = TICKET.model_copy(update={"ticket_id": "DEMO-A", "demo_case": "A", "scenario": "시연 A",
+                                       "answer_method": "discount.apply_coupon", "answer_tests": ["tests/x.py::t"]})
+    state = _state(attempts=[_attempt(1, True)]).model_copy(update={"ticket": ticket})
+    state.answer_check = {"answer_method": "discount.apply_coupon", "agent_method": "discount.apply_coupon",
+                          "tests": {"passed": True, "detail": "통과 1, 실패 0"}, "patch_ok": True}
+    dest = config.REPLAY_DIR / "DEMO-A"
+    dest.mkdir(parents=True)
+    state.save(dest / config.STATE_FILENAME)
+    (dest / "events.jsonl").write_text("", encoding="utf-8")
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    at.sidebar.radio[0].set_value("DEMO-A").run()
+    assert not any("정답과 맞습니다" in s.value for s in at.success)
+    next(b for b in at.button if b.label == "승인 후 반영").click().run()
+    next(b for b in at.button if b.label == "정답 확인").click().run()
+    assert not at.exception
+    assert any("정답과 맞습니다" in s.value for s in at.success)

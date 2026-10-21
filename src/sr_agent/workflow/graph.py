@@ -19,7 +19,7 @@ from sr_agent.agents.context import BudgetExceeded, RunContext
 from sr_agent.agents.loop import AgentStopped, run_agent
 from sr_agent.agents.specs import ANALYSIS, FIX, analysis_input, fix_input
 from sr_agent.llm import LLMError, LLMRefusal
-from sr_agent.tools.code import read_method
+from sr_agent.tools.code import function_source, module_rel, read_method
 from sr_agent.tools.execution import run_tests
 from sr_agent.tools.predict import predict_fault_location
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
@@ -110,6 +110,19 @@ def _work_diff(ws: Workspace) -> str:
     return "".join(parts)
 
 
+def _function_versions(ws: Workspace, method: str) -> tuple[str, str]:
+    """대상 함수의 원본·수정본 전체 코드 (화면의 수정 전/후 보기용). 못 읽으면 빈 문자열."""
+    rel = module_rel(method)
+    if rel is None:
+        return "", ""
+
+    def read(root: Path) -> str:
+        path = root / rel
+        text = path.read_bytes().decode("utf-8") if path.is_file() else ""
+        return function_source(text, method) or ""
+    return read(ws.original), read(ws.work)
+
+
 def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None],
                    options: RunOptions) -> None:
     feedback = None
@@ -167,6 +180,7 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         except AgentStopped as e:
             attempt.error = str(e)
         attempt.diff = _work_diff(ctx.ws)
+        attempt.before_code, attempt.after_code = _function_versions(ctx.ws, method)
         if options.use_attack:
             progress("공격 에이전트 실행 (관점별 라운드)")
             attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx, options.attack_rounds)

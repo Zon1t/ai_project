@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import streamlit as st  # noqa: E402
 
-from sr_agent import config, ui  # noqa: E402
+from sr_agent import config, demo, ui  # noqa: E402
 from sr_agent.rag.kb import load_rules  # noqa: E402
 from sr_agent.workflow.state import Ticket, TicketState  # noqa: E402
 
@@ -93,10 +93,7 @@ def sidebar() -> tuple[bool, Ticket | None]:
         mode = st.segmented_control("모드", ["재생", "실시간"], default="재생", required=True, key="mode",
                                     help=HELP["mode"])
         replay = mode == "재생"
-        tickets = ui.all_tickets()
-        if replay:
-            saved = set(ui.replay_tickets())
-            tickets = [t for t in tickets if t.ticket_id in saved]
+        tickets = ui.replay_ticket_list() if replay else ui.all_tickets()
         if not tickets:
             st.info("재생할 결과가 없습니다." if replay else "티켓이 없습니다.")
             return replay, None
@@ -104,11 +101,14 @@ def sidebar() -> tuple[bool, Ticket | None]:
 
         st.subheader("티켓", divider="gray")
         ids = list(by_id)
+        if (pending := st.session_state.pop("_select_ticket", None)) in by_id:  # 방금 불러온 시연 케이스 선택
+            st.session_state["ticket"] = pending
         captions = [" · ".join(x for x in (by_id[i].scenario, _status_of(i, replay)) if x) for i in ids]
         selected = st.radio("티켓", ids, key="ticket", label_visibility="collapsed", captions=captions,
                             format_func=lambda tid: f"{tid}  {ui.TYPE_LABELS[by_id[tid].type]}")
 
         if not replay:
+            demo_loader()
             with st.expander("새 티켓 등록", icon=":material/add:"):
                 with st.form("register", clear_on_submit=True, border=False):
                     kind = st.selectbox("유형", list(ui.TYPE_LABELS), format_func=ui.TYPE_LABELS.get)
@@ -126,6 +126,35 @@ def sidebar() -> tuple[bool, Ticket | None]:
         st.caption("재생 모드는 사전 실행 결과를 API 호출 없이 보여 줍니다." if replay
                    else "실시간 모드는 OpenAI API를 호출합니다 (티켓당 2~7분).")
     return replay, by_id[selected]
+
+
+def demo_loader() -> None:
+    """시연 케이스 불러오기: 홀드아웃 결함을 심은 작업본(A~C) 또는 정답 없는 새 티켓(D)을 등록한다."""
+    cases = {c["case_id"]: c for c in demo.demo_cases()}
+    if not cases:
+        return
+    with st.expander("시연 케이스 불러오기", icon=":material/science:"):
+        cid = st.selectbox("케이스", list(cases), format_func=lambda c: f"{c} · {cases[c]['label']}",
+                           label_visibility="collapsed")
+        st.caption(cases[cid]["goal"])
+        if st.button("불러오기", icon=":material/download:", width="stretch"):
+            with st.spinner("결함을 심은 작업본을 준비하는 중 (약 10초)"):
+                ticket = ui.register_demo(demo.prepare_demo(cid))
+            st.session_state["_select_ticket"] = ticket.ticket_id
+            st.rerun()
+
+
+def demo_panel(ticket: Ticket) -> None:
+    """시연 케이스에서 발표자가 확인할 것."""
+    try:
+        case = demo.find_case(ticket.demo_case)
+    except ValueError:
+        return
+    with st.expander(f"시연 케이스 {case['case_id']} · {case['label']}", expanded=True, icon=":material/science:"):
+        st.markdown(case["goal"])
+        st.markdown("**확인할 것**")
+        st.markdown("\n".join(f"{i}. {c}" for i, c in enumerate(case["check"], 1)))
+        st.caption("판단을 마치면 맨 아래 '정답 확인'으로 맞았는지 봅니다.")
 
 
 # ---------------- 상단: 티켓, 진행 단계, 실행 ----------------
@@ -214,7 +243,9 @@ def run_controls(replay: bool, ticket: Ticket, events: list[dict], stage_slot) -
             from sr_agent.llm import LLMQuotaExceeded
 
             try:
-                state = run_ticket(ticket, _client(), restart=restart, progress=progress)
+                if ticket.demo_case:  # 시연 케이스는 결함을 심은 작업본에서 돈다 (처음부터 다시면 결함 버전부터 새로)
+                    ticket = ui.register_demo(demo.prepare_demo(ticket.demo_case, reset=restart))
+                state = run_ticket(ticket, _client(), restart=restart and not ticket.demo_case, progress=progress)
             except (ValueError, LLMQuotaExceeded) as e:
                 status.update(label=str(e), state="error")
                 return False
@@ -289,9 +320,17 @@ def process(events: list[dict], summary: dict) -> None:
 
 # ---------------- 탭 ----------------
 
+def _current_code(state: TicketState) -> None:
+    code = ui.current_code(state)
+    if code:
+        with st.expander("이 함수의 현재 코드 (수정 전)", icon=":material/code:"):
+            st.code(code, language="python", line_numbers=True)
+
+
 def tab_location(state: TicketState) -> None:
     if state.ticket.type != "defect":
         st.caption(f"분석 단계 생략: 진단 결과가 대상 함수 `{state.ticket.method}`를 알려 줍니다.")
+        _current_code(state)
         return
     a = state.analysis
     left, right = st.columns(2, gap="large")
@@ -326,6 +365,7 @@ def tab_location(state: TicketState) -> None:
         verified = _badge("원본 실패 확인", "green", ":material/check:") if state.repro_verified \
             else _badge("원본 실패 미확인", "red", ":material/close:")
         st.markdown(f"재현 테스트 `{a.repro_test_path}` {verified}")
+        _current_code(state)
 
 
 def tab_evidence(state: TicketState) -> None:
@@ -384,7 +424,57 @@ def tab_diff(state: TicketState) -> None:
         st.markdown(att.fix.patch_summary)
     if att.error:
         st.error(att.error)
-    st.code(att.diff or "(변경 없음)", language="diff", line_numbers=True)
+    code_view(state, att)
+
+
+def code_view(state: TicketState, att) -> None:
+    """대상 함수의 수정 전/후 전체 코드. 나란히 보기와, 바뀐 줄을 색으로 표시한 한 화면 보기."""
+    v = ui.code_versions(state, att)
+    if v is None:  # 원본을 다시 만들 수 없으면 diff만
+        st.code(att.diff or "(변경 없음)", language="diff", line_numbers=True)
+        return
+    changed = ui.changed_line_numbers(v["before"], v["after"])
+    row = st.container(horizontal=True, vertical_alignment="center")
+    view = row.segmented_control("보기", ["나란히", "바뀐 줄 표시"], default="나란히", required=True,
+                                 key=f"view-{state.ticket.ticket_id}-{att.number}", label_visibility="collapsed")
+    row.caption(f"`{v['method']}` · 바뀐 줄 {len(changed)}개 (수정 후 기준 {_ranges(changed)})")
+    if view == "나란히":
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**수정 전**")
+            st.code(v["before"], language="python", line_numbers=True)
+        with right:
+            st.markdown("**수정 후**")
+            st.code(v["after"], language="python", line_numbers=True)
+    else:
+        import difflib
+
+        lines = difflib.unified_diff(v["before"].splitlines(), v["after"].splitlines(), lineterm="",
+                                     n=max(len(v["before"].splitlines()), len(v["after"].splitlines())))
+        body = [ln for ln in lines if not ln.startswith(("---", "+++", "@@"))]
+        st.code("\n".join(body), language="diff")
+        st.caption("초록(+) 줄이 새로 들어간 코드, 빨강(-) 줄이 지운 코드입니다.")
+    imports = v["imports"]
+    if imports["added"] or imports["removed"]:
+        parts = [f":green[+ `{i}`]" for i in imports["added"]] + [f":red[- `{i}`]" for i in imports["removed"]]
+        st.markdown("같은 파일의 import 변경: " + " ".join(parts))
+    with st.expander("파일 diff 원문", icon=":material/difference:"):
+        st.code(att.diff or "(변경 없음)", language="diff", line_numbers=True)
+
+
+def _ranges(numbers: list[int]) -> str:
+    """[3, 4, 5, 9] → '3-5, 9'."""
+    if not numbers:
+        return "-"
+    parts, start, prev = [], numbers[0], numbers[0]
+    for n in [*numbers[1:], None]:
+        if n is not None and n == prev + 1:
+            prev = n
+            continue
+        parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+        if n is not None:
+            start = prev = n
+    return ", ".join(parts)
 
 
 def tab_attack(state: TicketState) -> None:
@@ -476,6 +566,8 @@ def main() -> None:
         state = TicketState.load(state_path)
         events = ui.load_events(state) if state else []
     header(ticket, state)
+    if ticket.demo_case:
+        demo_panel(ticket)
     stage_slot = st.empty()
     stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)))
     if run_controls(replay, ticket, events, stage_slot):
@@ -499,6 +591,46 @@ def main() -> None:
         tab_attack(state)
     if approval(state, state_path):
         st.rerun()
+    if ticket.demo_case:
+        answer_section(state, state_path, replay)
+
+
+def answer_section(state: TicketState, state_path: Path, replay: bool) -> None:
+    """시연 케이스 정답 확인: 실제 결함 함수, 숨긴 정답 테스트 결과, 담당자 판단과의 일치."""
+    case = demo.find_case(state.ticket.demo_case)
+    key = f"answer-{state.ticket.ticket_id}"
+    with st.container(border=True):
+        st.markdown("**정답 확인**", help="승인·반려로 판단한 뒤 누르세요. 결함 때문에 실패해 에이전트·판정에서 "
+                    "숨겨 둔 기존 테스트를 마지막 패치에 돌려, 승인하는 것이 맞았는지 알려 줍니다.")
+        if not st.session_state.get(key):
+            if st.button("정답 확인", icon=":material/fact_check:"):
+                if not replay or state.answer_check is None:
+                    with st.spinner("숨긴 정답 테스트를 돌리는 중"):
+                        state.answer_check = demo.check_answer(state)
+                    state.save(state_path)
+                st.session_state[key] = True
+                st.rerun()
+            return
+        answer = state.answer_check or {}
+        if answer.get("answer_method"):
+            same = answer["answer_method"] == answer.get("agent_method")
+            st.markdown(f"실제 결함 함수 `{answer['answer_method']}` · 에이전트 판단 `{answer.get('agent_method')}` "
+                        + (_badge("일치", "green", ":material/check:") if same
+                           else _badge("다름", "red", ":material/close:")))
+        tests = answer.get("tests")
+        if tests:
+            mark = {True: ":green[:material/check_circle: 통과]", False: ":red[:material/cancel: 실패]",
+                    None: ":gray[확인 불가]"}[tests["passed"]]
+            st.markdown(f"숨긴 정답 테스트 (마지막 패치): {mark} — :gray[{tests['detail']}]")
+        match = demo.judgement_matches(state)
+        if match is True:
+            st.success("담당자 판단이 정답과 맞습니다.", icon=":material/thumb_up:")
+        elif match is False:
+            right = "승인" if answer.get("patch_ok") else "반려"
+            st.warning(f"정답은 '{right}'입니다. 아래 설명과 패치 diff를 다시 보세요.", icon=":material/info:")
+        elif answer.get("patch_ok") is not None:
+            st.caption("승인 또는 반려를 먼저 하면 판단이 맞았는지 함께 알려 줍니다.")
+        st.caption(case["answer_note"])
 
 
 main()

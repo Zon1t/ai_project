@@ -54,6 +54,10 @@ class Ticket(BaseModel):
     scenario: str | None = None
     method: str | None = None  # 코드 표준화·보안: 진단이 알려 준 대상 함수 (분석 단계를 건너뜀)
     judge: JudgeSpec | None = None
+    # 시연 케이스(data/demo_cases.json): 발표자가 판단한 뒤 "정답 확인"으로만 쓴다 (에이전트·판정에 넣지 않음)
+    demo_case: str | None = None
+    answer_method: str | None = None  # 실제 결함 함수
+    answer_tests: list[str] = Field(default_factory=list)  # 결함 때문에 실패해 숨긴 기존 테스트
 
     @property
     def text(self) -> str:
@@ -164,6 +168,9 @@ class FixAttempt(BaseModel):
     number: int  # 1 = 첫 시도, 2~ = 재시도
     fix: FixOutput | None = None
     diff: str = ""
+    # 화면의 수정 전/후 보기용 대상 함수 전체 코드 (없으면 화면이 원본 파일에 diff를 적용해 다시 만든다)
+    before_code: str = ""
+    after_code: str = ""
     attack: AttackReport | None = None
     judge: JudgeResult | None = None
     error: str | None = None
@@ -190,6 +197,7 @@ class TicketState(BaseModel):
     attempts: list[FixAttempt] = Field(default_factory=list)
     human_review_reason: str | None = None
     decision: Decision | None = None
+    answer_check: dict | None = None  # 시연 케이스 "정답 확인" 결과 (demo.check_answer)
     tokens_used: int = 0
     run_ids: list[str] = Field(default_factory=list)
     updated_at: str = ""

@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sr_agent import config
+from sr_agent.tools.code import function_source, module_rel
 from sr_agent.tools.workspace import remove_tree
 from sr_agent.workflow.state import Decision, Ticket, TicketState
 
@@ -168,6 +169,16 @@ def register_ticket(ticket_type: str, title: str, body: str, method: str | None 
     return ticket
 
 
+def register_demo(ticket: Ticket) -> Ticket:
+    """시연 케이스 티켓을 등록 목록에 넣는다 (같은 ID가 있으면 바꾼다)."""
+    path = registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [t.model_dump(exclude_none=True) for t in registered_tickets() if t.ticket_id != ticket.ticket_id]
+    rows.append(ticket.model_dump(exclude_none=True))
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return ticket
+
+
 def live_state_path(ticket_id: str) -> Path:
     return config.RUNS_DIR / ticket_id / config.STATE_FILENAME
 
@@ -202,6 +213,117 @@ def cited_history_ids(state: TicketState) -> list[str]:
     return [h for h in dict.fromkeys(ids) if h.startswith("HIS-")]
 
 
+# ---------------- 수정 전/후 코드 ----------------
+
+_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@")
+
+
+def apply_diff(text: str, diff: str, rel: str) -> str | None:
+    """unified diff에서 rel 파일 부분을 text에 적용한다. 문맥이 맞지 않으면 None (다른 원본에서 만든 diff)."""
+    lines = text.splitlines()
+    section, inside = [], False
+    for line in diff.splitlines():
+        if line.startswith("--- "):
+            inside = line[4:].strip() == f"a/{rel}"
+            continue
+        if inside and not line.startswith("+++ "):
+            section.append(line)
+    if not section:
+        return text
+    out, pos, i = [], 0, 0
+    while i < len(section):
+        m = _HUNK.match(section[i])
+        i += 1
+        if not m:
+            continue
+        start, length = int(m.group(1)), int(m.group(2) or 1)
+        start = start if length == 0 else start - 1
+        if start < pos:
+            return None
+        out += lines[pos:start]
+        pos = start
+        while i < len(section) and not section[i].startswith("@@"):
+            tag, body = section[i][:1], section[i][1:]
+            i += 1
+            if tag in (" ", "-"):
+                if pos >= len(lines) or lines[pos] != body:
+                    return None
+                if tag == " ":
+                    out.append(body)
+                pos += 1
+            elif tag == "+":
+                out.append(body)
+    out += lines[pos:]
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _target_method(state: TicketState, attempt=None) -> str | None:
+    if attempt is not None and attempt.fix:
+        return attempt.fix.method
+    return state.analysis.final_method if state.analysis else state.ticket.method
+
+
+def _original_text(ticket_id: str, rel: str) -> str:
+    """티켓 작업본의 원본 복사본이 있으면 그것, 없으면 target/ 원본 (시연 재생 데이터는 target/에서 실행했다)."""
+    for root in (config.RUNS_DIR / ticket_id / config.ORIGINAL_DIRNAME, config.TARGET_ROOT):
+        if (root / rel).is_file():
+            return (root / rel).read_bytes().decode("utf-8")
+    return ""
+
+
+def current_code(state: TicketState) -> str | None:
+    """대상(최종 결함) 함수의 수정 전 코드."""
+    first = state.attempts[0] if state.attempts else None
+    if first is not None and first.before_code:
+        return first.before_code
+    method = _target_method(state)
+    rel = module_rel(method) if method else None
+    return function_source(_original_text(state.ticket.ticket_id, rel), method) if rel else None
+
+
+def code_versions(state: TicketState, attempt) -> dict | None:
+    """수정 시도의 대상 함수 수정 전/후 전체 코드와 바뀐 import. 만들 수 없으면 None (diff만 보여 준다)."""
+    method = _target_method(state, attempt)
+    rel = module_rel(method) if method else None
+    if rel is None:
+        return None
+    changed = [ln for ln in _file_diff_lines(attempt.diff, rel) if ln[1:].lstrip().startswith(("import ", "from "))]
+    imports = {"added": [ln[1:] for ln in changed if ln[0] == "+"],
+               "removed": [ln[1:] for ln in changed if ln[0] == "-"]}
+    if attempt.before_code and attempt.after_code:
+        return {"method": method, "before": attempt.before_code, "after": attempt.after_code, "imports": imports}
+    text = _original_text(state.ticket.ticket_id, rel)
+    patched = apply_diff(text, attempt.diff, rel) if text else None
+    before = function_source(text, method) if text else None
+    after = function_source(patched, method) if patched else None
+    if before is None or after is None:
+        return None
+    return {"method": method, "before": before, "after": after, "imports": imports}
+
+
+def _file_diff_lines(diff: str, rel: str) -> list[str]:
+    """diff에서 rel 파일의 추가·삭제 줄 (+/- 기호 포함)."""
+    rows, inside = [], False
+    for line in diff.splitlines():
+        if line.startswith("--- "):
+            inside = line[4:].strip() == f"a/{rel}"
+        elif inside and line[:1] in "+-" and not line.startswith("+++ "):
+            rows.append(line)
+    return rows
+
+
+def changed_line_numbers(before: str, after: str) -> list[int]:
+    """수정 후 코드에서 바뀌거나 새로 생긴 줄 번호 (1부터)."""
+    import difflib
+
+    a, b = before.splitlines(), after.splitlines()
+    changed = []
+    for tag, _, _, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if tag in ("replace", "insert"):
+            changed += range(j1 + 1, j2 + 1)
+    return changed
+
+
 # ---------------- 재생 모드 (PRD 9장) ----------------
 
 def replay_source(ticket_id: str) -> Path:
@@ -216,6 +338,13 @@ def replay_working_path(ticket_id: str) -> Path:
 def replay_tickets() -> list[str]:
     root = config.REPLAY_DIR
     return sorted(p.name for p in root.iterdir() if (p / config.STATE_FILENAME).is_file()) if root.is_dir() else []
+
+
+def replay_ticket_list() -> list[Ticket]:
+    """재생할 수 있는 티켓 (재생 데이터 안의 티켓 정보로. 시연 S1~S3, 그다음 시연 케이스 순)."""
+    tickets = [s.ticket for tid in replay_tickets()
+               if (s := TicketState.load(replay_source(tid) / config.STATE_FILENAME)) is not None]
+    return sorted(tickets, key=lambda t: (t.demo_case is not None, t.demo_case or "", t.ticket_id))
 
 
 def load_events(state: TicketState) -> list[dict]:
@@ -235,6 +364,10 @@ def save_replay(ticket_id: str) -> Path:
         raise FileNotFoundError(f"실행 결과 없음: {live_state_path(ticket_id)}")
     if state.decision is not None or state.status in ("approved", "rejected"):  # 재생은 결정 전 상태에서 시작
         state.decision, state.status = None, "approval_pending" if state.passed else "human_review"
+    if state.ticket.answer_tests:  # 시연 케이스: 재생에는 작업본이 없으니 정답 확인 결과를 미리 남긴다
+        from sr_agent.demo import check_answer
+
+        state.answer_check = check_answer(state)
     dest = replay_source(ticket_id)
     if dest.exists():
         remove_tree(dest)

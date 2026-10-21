@@ -37,6 +37,27 @@ def find_function(tree: ast.Module, names: list[str]) -> ast.FunctionDef | ast.A
     return None
 
 
+def function_source(text: str, method: str) -> str | None:
+    """모듈 소스 text에서 함수 하나의 코드 (데코레이터 포함). 없거나 문법 오류면 None. 화면·상태 기록용."""
+    parsed = _split_method(method) if isinstance(method, str) else None
+    if parsed is None:
+        return None
+    try:
+        node = find_function(ast.parse(text), parsed[1])
+    except SyntaxError:
+        return None
+    if node is None:
+        return None
+    start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+    return "\n".join(text.splitlines()[start - 1:node.end_lineno])
+
+
+def module_rel(method: str) -> str | None:
+    """"모듈.함수" → 대상 프로젝트 기준 파일 경로 (src/order_settlement/모듈.py)."""
+    parsed = _split_method(method) if isinstance(method, str) else None
+    return f"{config.TARGET_SRC_SUBDIR}/{config.TARGET_PACKAGE}/{parsed[0]}.py" if parsed else None
+
+
 def module_path(ws: Workspace, module: str) -> tuple[str, Path]:
     """(대상 프로젝트 기준 상대 경로, 작업본 안 절대 경로)."""
     rel = f"{config.TARGET_SRC_SUBDIR}/{config.TARGET_PACKAGE}/{module}.py"
