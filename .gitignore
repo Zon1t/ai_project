@@ -239,3 +239,6 @@ data/chroma/
 data/cache/
 .ruff_cache/
 .streamlit/secrets.toml
+
+# Office 임시 잠금 파일 (문서를 열어 둘 때 생김)
+~$*
