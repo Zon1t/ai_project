@@ -72,6 +72,9 @@ def verify_repro(ws: Workspace, path: str, ticket: Ticket | None = None) -> str 
     """
     if not path.startswith(config.REPRO_DIRNAME + "/"):
         return f"재현 테스트 경로는 {config.REPRO_DIRNAME}/ 아래여야 함: {path}"
+    if not (ws.root / path).is_file():
+        return ("재현 테스트를 작성하지 않음: write_repro_test를 호출하지 않고 결과를 정리했다. 원인 함수를 정했으면 "
+                "탐색을 멈추고 바로 write_repro_test로 작성한 뒤 run_tests로 원본 실패를 확인한다.")
     result = run_tests(ws, "original", [path], timeout=config.JUDGE_TEST_TIMEOUT_S)
     if "error" in result:
         return f"재현 테스트 실행 오류: {result['error']}"

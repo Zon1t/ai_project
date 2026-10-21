@@ -125,8 +125,9 @@ def reference_check(ws: Workspace, spec: JudgeSpec) -> JudgeCheck:
     if raw["minimal"]:
         m = raw["minimal"]
         kind = {"under_fix": "미달", "regression": "회귀"}.get(m.get("kind"), "")
+        # 정답 출력은 넣지 않는다 (판정 설명은 재시도하는 수정 에이전트에 넘어가고, 정답 구현은 에이전트에 숨긴다)
         detail += (f". 최소 사례({kind}) {_short(m['input'])}: 수정본 {_short(m['results']['patched'])}, "
-                   f"정답 {_short(m['results']['reference'])}, 원본 {_short(m['results']['original'])}")
+                   f"원본 {_short(m['results']['original'])}")
     return JudgeCheck(name="reference_property", passed=raw["mismatches"] == 0, detail=detail,
                       data={k: raw[k] for k in ("examples", "mismatches", "under_fix", "regression")})
 

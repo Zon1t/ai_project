@@ -129,7 +129,7 @@ _MEMORY_LOCK = threading.Lock()  # 동시에 도는 공격 라운드가 Chroma�
 def _collection(chroma_dir: Path | None = None):
     from sr_agent.rag.index import open_client
 
-    client = open_client(chroma_dir)
+    client = open_client(chroma_dir or config.ATTACK_MEMORY_DIR)
     return client.get_or_create_collection(config.ATTACK_COLLECTION, embedding_function=None)
 
 

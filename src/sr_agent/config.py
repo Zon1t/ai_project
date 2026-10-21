@@ -54,6 +54,7 @@ PROPERTY_MAX_EXAMPLES = 500
 PROPERTY_CASES_REPORTED = 5  # 에이전트에 돌려줄 불일치 사례 수 (최소 사례는 따로)
 JUDGE_PROPERTY_EXAMPLES = 200  # PRD 7.2: Hypothesis 입력 200개
 ATTACK_COLLECTION = "attacks"  # 공격 이력 (Chroma)
+ATTACK_MEMORY_DIR: Path | None = None  # 공격 이력 위치 (None이면 CHROMA_DIR). E2E는 조건마다 따로 둔다
 ATTACK_MEMORY_TOP_K = 5
 ATTACK_MAX_TURNS = 16  # 공격 라운드 하나의 턴(LLM 호출) 상한. 12에서는 S1 라운드 2개가 회귀 확인 전에 상한에 걸림
 ATTACK_ROUNDS = 3  # 수정 시도 1회당 공격 라운드 수 (라운드마다 다른 관점)

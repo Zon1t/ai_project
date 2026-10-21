@@ -8,7 +8,9 @@ from sr_agent import config
 from sr_agent.e2e import (
     build_ticket,
     case_result,
+    cited_ids,
     failing_tests,
+    hidden_result,
     hide_tests,
     holdout_cases,
     original_function,
@@ -24,6 +26,7 @@ from sr_agent.workflow.judge import hidden_tests_check, judge_defect
 from sr_agent.workflow.state import (
     AnalysisOutput,
     FixAttempt,
+    FixOutput,
     JudgeCheck,
     JudgeResult,
     TicketState,
@@ -109,3 +112,33 @@ def test_case_result_and_summary(tmp_path):
     assert summary["seconds_mean"] == 12.3 and summary["passed_at_attempt"]["1"] == 1
     md = render("t", summary, [ok, bad], RunOptions(use_attack=False))
     assert "**1/2 (50%)**" in md and "공격 단계 끔" in md and "E2E-00594a87-A" in md
+
+
+def test_hidden_tests_after_judge_count_regression_leaks(tmp_path):
+    """숨긴 테스트는 판정 뒤 따로 돌린다. 판정은 통과했는데 숨긴 테스트가 실패하면 회귀 누출."""
+    mutant = {"mutant_id": "MUT-1", "method": "coupon.create_coupon", "inject_type": "ast", "operator": "RSD"}
+    state = _state()
+    state.attempts[0].fix = FixOutput(method="coupon.create_coupon", rule_ids=["BIZ-CPN-02"], history_ids=[],
+                                      patch_summary="하한 적용 (BIZ-CPN-02, HIS-dc2217ee). DEP-DT-01에 따라 교체")
+    assert cited_ids(state) == ["BIZ-CPN-02", "HIS-dc2217ee", "DEP-DT-01"]
+    leak = case_result(state, mutant, tmp_path, 1.0, {"passed": False, "detail": "실패 1"})
+    clean = case_result(state, mutant, tmp_path, 1.0, {"passed": True, "detail": ""})
+    failed = case_result(_state(False), mutant, tmp_path, 1.0, None)
+    assert leak["regression_leak"] and leak["hidden_tests_pass"] is False and leak["cited"]
+    assert not clean["regression_leak"] and failed["hidden_tests_pass"] is None and failed["cited"] is None
+    summary = summarize([leak, clean, failed])
+    assert summary["solved"] == 2 and summary["hidden_pass"] == 1 and summary["regression_leaks"] == 1
+    assert summary["citation_rate"] == 1.0  # 패치가 없는 티켓은 인용률 분모에서 뺀다
+    md = render("t", summary, [leak, clean, failed], RunOptions())
+    assert "❌ 누출" in md and "| 회귀 누출 (판정 통과 후 숨긴 테스트 실패) | 1건 |" in md
+
+
+def test_hidden_result_uses_saved_or_legacy_check(tmp_path):
+    ticket, mutant = holdout_cases("A")[0]
+    assert hidden_result(_state(False), ticket, mutant, tmp_path) is None  # 판정 미통과
+    legacy = hidden_result(_state(), ticket, mutant, tmp_path)  # Step 4: 숨긴 테스트가 판정 조건이던 실행
+    assert legacy == {"passed": True, "detail": ""}
+    saved = tmp_path / ticket.ticket_id / "hidden_check.json"
+    saved.parent.mkdir(parents=True)
+    saved.write_text(json.dumps({"passed": False, "detail": "x"}), encoding="utf-8")
+    assert hidden_result(_state(), ticket, mutant, tmp_path) == {"passed": False, "detail": "x"}

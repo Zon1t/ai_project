@@ -1,17 +1,21 @@
-"""E2E 배치 (PRD F7-2, F7-3 준비): 홀드아웃 결함 20건을 사람 개입 없이 처리하고 해결률을 낸다.
+"""E2E 배치 (PRD F7-2, F7-3): 홀드아웃 결함 20건을 사람 개입 없이 처리하고 해결률을 낸다.
 
 티켓마다:
 1. 원본 복사본·작업본에 결함을 심는다 (mutants.jsonl).
 2. 결함 때문에 실패하는 기존 테스트를 두 복사본에서 숨긴다 → 에이전트는 "기존 테스트는 통과하는데 버그가 있는"
-   상황에서 시작한다 (S1과 같은 조건). 숨긴 테스트는 판정만 쓴다 (숨은 정답 테스트).
-3. 판정 명세: 숨은 정답 테스트 + 정답 구현 = 결함을 심기 전 원래 함수 (재현 테스트 기대값 검증에 쓴다).
+   상황에서 시작한다 (S1과 같은 조건).
+3. 판정 명세: 정답 구현 = 결함을 심기 전 원래 함수 (재현 테스트 기대값 검증, 공격 입력 재판정에 쓴다).
 4. 워크플로를 그대로 돌린다 (분석 → 수정 → 공격 → 판정, 재시도 3회).
+5. 숨긴 테스트는 판정에 넣지 않고, 판정을 통과한 패치에만 따로 돌린다 → 걸리면 회귀 누출 (PRD 2장 KPI).
+공격 이력은 조건(태그)마다 따로 둔다 (runs/e2e/<태그>/attack_memory). 다른 조건의 공격이 섞이지 않게.
 결과: eval/results/e2e_<태그>.{md,csv,json}. 끝난 티켓은 건너뛰고 이어서 실행한다.
 """
 
 import ast
 import csv
 import json
+import re
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,9 +28,13 @@ from sr_agent.tools.code import find_function
 from sr_agent.tools.execution import run_tests
 from sr_agent.tools.workspace import Workspace, prepare_workspace
 from sr_agent.workflow.graph import FINAL, RunOptions, run_ticket
+from sr_agent.workflow.judge import hidden_tests_check
 from sr_agent.workflow.state import JudgeSpec, ReferenceImpl, Ticket, TicketState
 
 REPORTERS = {"A": "운영", "B": "QA"}
+# 규칙 ID·이력 ID. 한글이 바로 붙어도("DEP-DT-01에") 잡히게 \b 대신 영숫자 경계를 쓴다
+CITATION = re.compile(r"(?<![A-Za-z0-9])(?:(?:SEC|DEP|STY|BIZ)(?:-[A-Z0-9]+)+|HIS-[0-9a-f]{6,})(?![A-Za-z0-9])")
+HIDDEN_CHECK_FILE = "hidden_check.json"
 
 
 def e2e_ticket_id(mutant_id: str, reporter: str) -> str:
@@ -129,18 +137,58 @@ def _usage(state: TicketState, runs_dir: Path) -> dict:
     return total
 
 
-def case_result(state: TicketState, mutant: dict, runs_dir: Path, seconds: float | None) -> dict:
-    """티켓 한 건의 결과 행."""
+def cited_ids(state: TicketState) -> list[str] | None:
+    """마지막 패치 설명 본문에 인용된 규칙·이력 ID (PRD 2장 근거 인용률). 패치가 없으면 None."""
+    fixes = [a.fix for a in state.attempts if a.fix]
+    return list(dict.fromkeys(CITATION.findall(fixes[-1].patch_summary))) if fixes else None
+
+
+def field_ids(state: TicketState) -> list[str] | None:
+    """마지막 패치의 rule_ids·history_ids 필드 (화면 근거 탭에 보이는 값, 참고 지표). 패치가 없으면 None."""
+    fixes = [a.fix for a in state.attempts if a.fix]
+    return [*fixes[-1].rule_ids, *fixes[-1].history_ids] if fixes else None
+
+
+def hidden_result(state: TicketState, ticket: Ticket, mutant: dict, runs_dir: Path) -> dict | None:
+    """판정을 통과한 패치에 숨긴 테스트를 돌린 결과 {"passed", "detail"}. 판정 미통과면 None.
+
+    결과는 runs/e2e/<태그>/<티켓>/hidden_check.json에 남겨 다시 쓴다.
+    """
+    if not (state.status == "approval_pending" and state.passed):
+        return None
+    path = runs_dir / ticket.ticket_id / HIDDEN_CHECK_FILE
+    if path.is_file():
+        return json.loads(path.read_text(encoding="utf-8"))
+    legacy = next((c for a in state.attempts if a.judge for c in a.judge.checks if c.name == "hidden_tests_pass"),
+                  None)  # 숨긴 테스트가 판정에 들어 있던 실행 (Step 4)
+    if legacy is not None:
+        return {"passed": legacy.passed, "detail": legacy.detail}
+    spec = prepare(ticket, mutant, runs_dir).judge
+    check = hidden_tests_check(prepare_workspace(ticket.ticket_id, runs_dir=runs_dir), spec)
+    out = {"passed": check.passed, "detail": check.detail}
+    path.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
+def case_result(state: TicketState, mutant: dict, runs_dir: Path, seconds: float | None,
+                hidden: dict | None = None) -> dict:
+    """티켓 한 건의 결과 행. hidden: 판정 통과 패치에 숨긴 테스트를 돌린 결과 (hidden_result)."""
     true_method = mutant["method"]
     predicted = [p["method"] for p in state.prediction[:3]]
     usage = _usage(state, runs_dir)
     passed_at = next((a.number for a in state.attempts if a.judge and a.judge.passed), None)
     reports = [a.attack for a in state.attempts if a.attack]
     found = [f.angle for r in reports for f in r.verified()]
+    solved = state.status == "approval_pending" and state.passed
+    cited, fields = cited_ids(state), field_ids(state)
     return {
         "ticket_id": state.ticket.ticket_id, "mutant_id": mutant["mutant_id"], "method": true_method,
         "inject_type": mutant["inject_type"], "operator": mutant["operator"],
-        "status": state.status, "solved": state.status == "approval_pending" and state.passed,
+        "status": state.status, "solved": solved,
+        "hidden_tests_pass": hidden["passed"] if hidden else None,  # 판정 통과 패치만
+        "regression_leak": bool(solved and hidden and hidden["passed"] is False),
+        "cited": bool(cited) if cited is not None else None, "cited_ids": ",".join(cited or []),
+        "cited_fields": bool(fields) if fields is not None else None,
         "model_top3_hit": true_method in predicted if predicted else None,
         "model_rank": predicted.index(true_method) + 1 if true_method in predicted else None,
         "agent_location_correct": state.analysis.final_method == true_method if state.analysis else False,
@@ -158,16 +206,17 @@ def run_case(ticket: Ticket, mutant: dict, runs_dir: Path, client, options: RunO
     state_path = runs_dir / ticket.ticket_id / config.STATE_FILENAME
     done = TicketState.load(state_path)
     if done is not None and done.status in FINAL and not restart:
-        return case_result(done, mutant, runs_dir, None)
+        return case_result(done, mutant, runs_dir, None, hidden_result(done, ticket, mutant, runs_dir))
     if restart and (runs_dir / ticket.ticket_id).exists():
-        import shutil
-
         shutil.rmtree(runs_dir / ticket.ticket_id)
     started = time.monotonic()
     prepared = prepare(ticket, mutant, runs_dir)
-    state = run_ticket(prepared, client, runs_dir=runs_dir, options=options,
+    # 숨긴 테스트는 판정에 넣지 않는다 (판정 통과 뒤 따로 돌려 회귀 누출을 센다)
+    judge = prepared.judge.model_copy(update={"hidden_tests": []})
+    state = run_ticket(prepared.model_copy(update={"judge": judge}), client, runs_dir=runs_dir, options=options,
                        progress=lambda m: print(f"  [{ticket.ticket_id}] {m}", flush=True))
-    return case_result(state, mutant, runs_dir, time.monotonic() - started)
+    seconds = time.monotonic() - started
+    return case_result(state, mutant, runs_dir, seconds, hidden_result(state, prepared, mutant, runs_dir))
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -184,6 +233,10 @@ def summarize(rows: list[dict]) -> dict:
         "n": len(rows),
         "solved": sum(r["solved"] for r in rows),
         "solved_rate": rate([r["solved"] for r in rows]),
+        "hidden_pass": sum(r.get("hidden_tests_pass") is True for r in rows),  # 판정 통과 + 숨긴 테스트 통과
+        "regression_leaks": sum(r.get("regression_leak", False) for r in rows),
+        "citation_rate": rate([r.get("cited") for r in rows]),
+        "citation_field_rate": rate([r.get("cited_fields") for r in rows]),
         "model_top3_rate": rate([r["model_top3_hit"] for r in rows]),
         "agent_location_rate": rate([r["agent_location_correct"] for r in rows]),
         "mean_attempts": rate([r["attempts"] for r in rows]),
@@ -217,6 +270,10 @@ def render(tag: str, summary: dict, rows: list[dict], options: RunOptions) -> st
         f"출력 ${config.PRICE_PER_MTOK['output']}", "",
         "| 지표 | 값 |", "|---|---|",
         f"| **해결률** (사람 개입 없이 판정 통과) | **{solved}** |",
+        f"| 판정 통과 + 숨긴 테스트 통과 | {summary.get('hidden_pass', '-')}/{summary['n']} |",
+        f"| 회귀 누출 (판정 통과 후 숨긴 테스트 실패) | {summary.get('regression_leaks', '-')}건 |",
+        f"| 근거 인용률 (마지막 패치 설명 본문에 규칙·이력 ID) | {pct(summary.get('citation_rate'))} "
+        f"(rule_ids·history_ids 필드 기준 {pct(summary.get('citation_field_rate'))}) |",
         f"| 모델 Top-3 적중 | {pct(summary['model_top3_rate'])} |",
         f"| 에이전트 최종 위치 정답 | {pct(summary['agent_location_rate'])} |",
         f"| 평균 수정 시도 | {summary['mean_attempts']} |",
@@ -231,13 +288,16 @@ def render(tag: str, summary: dict, rows: list[dict], options: RunOptions) -> st
         "| 주입 방식 | n | 해결률 |", "|---|---|---|",
         *[f"| {k} | {v['n']} | {pct(v['solved_rate'])} |" for k, v in summary["by_inject_type"].items()], "",
         "## 티켓별", "",
-        "| 티켓 | 정답 함수 | 방식 | 결과 | 모델 순위 | 에이전트 위치 | 시도 | 토큰 | 비용 | 시간 | 사유 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| 티켓 | 정답 함수 | 방식 | 결과 | 숨긴 테스트 | 모델 순위 | 에이전트 위치 | 시도 | 토큰 | 비용 | 시간 "
+        "| 사유 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    marks = {True: "✅", False: "❌ 누출", None: "-"}
     for r in rows:
         lines.append(
             f"| {r['ticket_id']} | `{r['method']}` | {r['inject_type']}/{r['operator']} | "
-            f"{'✅' if r['solved'] else '❌ ' + r['status']} | {r['model_rank'] or '-'} | "
+            f"{'✅' if r['solved'] else '❌ ' + r['status']} | {marks[r.get('hidden_tests_pass')]} | "
+            f"{r['model_rank'] or '-'} | "
             f"{'✅' if r['agent_location_correct'] else '❌ ' + str(r['agent_method'])} | {r['attempts']} | "
             f"{r['tokens']:,} | ${r['cost_usd']} | {r['seconds'] or '-'} | {r['reason'][:60]} |")
     return "\n".join(lines) + "\n"
@@ -253,8 +313,15 @@ def run_e2e(tag: str = "full", options: RunOptions | None = None, reporter: str 
         client = llm.get_client()
     runs_dir = config.RUNS_DIR / "e2e" / (runs_tag or tag)
     cases = holdout_cases(reporter, limit)
-    with ThreadPoolExecutor(workers) as executor:
-        rows = list(executor.map(lambda c: run_case(c[0], c[1], runs_dir, client, options, restart), cases))
+    memory = runs_dir / "attack_memory"  # 조건마다 따로 (다른 조건·이전 실행의 공격이 섞이지 않게)
+    if restart and memory.exists():
+        shutil.rmtree(memory)
+    previous, config.ATTACK_MEMORY_DIR = config.ATTACK_MEMORY_DIR, memory
+    try:
+        with ThreadPoolExecutor(workers) as executor:
+            rows = list(executor.map(lambda c: run_case(c[0], c[1], runs_dir, client, options, restart), cases))
+    finally:
+        config.ATTACK_MEMORY_DIR = previous
     summary = summarize(rows)
     out = config.EVAL_RESULTS_DIR
     out.mkdir(parents=True, exist_ok=True)
