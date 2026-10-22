@@ -509,10 +509,15 @@ def save_replay(ticket_id: str) -> Path:
 
 
 def load_replay(ticket_id: str, reset: bool = False) -> tuple[TicketState, Path, list[dict]]:
-    """재생용 (상태, 결정을 기록할 사본 경로, 실행 이벤트). 사본이 없거나 reset이면 저장본에서 새로 복사."""
+    """재생용 (상태, 결정을 기록할 사본 경로, 실행 이벤트).
+
+    사본이 없거나, reset이거나, 저장본을 다시 녹화해 사본보다 새로우면 저장본에서 새로 복사한다
+    (다시 녹화한 뒤에도 예전 사본을 보여 주던 문제. 재생 중 승인·반려는 사본에 써서 사본이 더 새로우면 그대로 둔다).
+    """
     src = replay_source(ticket_id)
     work = replay_working_path(ticket_id)
-    if reset or not work.is_file():
+    stale = work.is_file() and (src / config.STATE_FILENAME).stat().st_mtime > work.stat().st_mtime
+    if reset or stale or not work.is_file():
         work.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src / config.STATE_FILENAME, work)
     events_path = src / "events.jsonl"

@@ -532,3 +532,21 @@ def test_app_live_mode_password(dirs, monkeypatch):
     at.sidebar.text_input[0].input("s3cret")
     at.sidebar.button[0].click().run()
     assert not at.exception and any(o.startswith("SR-2041") for o in at.sidebar.radio[0].options)
+
+
+def test_replay_copy_refreshes_after_rerecording(dirs):
+    """재생 데이터를 다시 녹화하면 예전 사본 대신 새 녹화를 보여 준다. 재생 중 승인·반려한 사본은 유지."""
+    import os
+
+    dest = config.REPLAY_DIR / "SR-2041"
+    dest.mkdir(parents=True)
+    _state().save(dest / config.STATE_FILENAME)
+    state, work, _ = ui.load_replay("SR-2041")
+    ui.decide(state, work, approve=False, reason="시연")
+    assert ui.load_replay("SR-2041")[0].status == "rejected"  # 사본이 더 새로우면 그대로
+    newer = _state().model_copy(update={"tokens_used": 777})
+    newer.save(dest / config.STATE_FILENAME)
+    future = work.stat().st_mtime + 10
+    os.utime(dest / config.STATE_FILENAME, (future, future))
+    again = ui.load_replay("SR-2041")[0]
+    assert again.tokens_used == 777 and again.status == "approval_pending"

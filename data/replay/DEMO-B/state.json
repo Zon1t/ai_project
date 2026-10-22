@@ -1,0 +1,395 @@
+{
+  "ticket": {
+    "ticket_id": "DEMO-B",
+    "type": "defect",
+    "title": "상품 리뷰 평균 평점이 비정상적으로 높습니다",
+    "body": "상품별 리뷰 평점을 확인할 때 평균이 실제 리뷰 점수보다 훨씬 크게 표시되는 사례가 있습니다. 별점이 한 건뿐인 상품에서도 평균이 4점을 크게 넘는 등, 고객 문의 응대와 상품 정보 확인에 혼선이 생깁니다. 여러 조건에서 같은 유형의 이상이 확인되어 점검을 요청드립니다.",
+    "scenario": "시연 B",
+    "method": null,
+    "judge": {
+      "method": "review.calc_average_rating",
+      "strategy": null,
+      "reference": {
+        "method": "review.calc_average_rating",
+        "code": "def calc_average_rating(ratings):\n    # type: (List[int]) -> float\n    \"\"\"평균 평점. 소수 둘째 자리에서 반올림(half-up)해 첫째 자리까지 표시.\n\n    예: 4.05 -> 4.1, 4.04 -> 4.0. 리뷰가 없으면 0.0.\n    \"\"\"\n    if not ratings:\n        return 0.0\n    total = sum(validate_rating(r) for r in ratings)\n    count = len(ratings)\n    scaled = (total * 20 + count) // (count * 2)\n    return scaled / 10.0\n"
+      },
+      "attack_inputs": [],
+      "hidden_tests": []
+    },
+    "demo_case": "B",
+    "answer_method": "review.calc_average_rating",
+    "answer_tests": [
+      "tests/test_review.py::test_calc_average_rating[ratings1-4.0]",
+      "tests/test_review.py::test_calc_average_rating[ratings2-1.5]",
+      "tests/test_review.py::test_calc_average_rating[ratings3-4.7]",
+      "tests/test_review.py::test_calc_average_rating[ratings4-1.3]",
+      "tests/test_review.py::test_calc_average_rating[ratings5-4.1]",
+      "tests/test_review.py::test_calc_average_rating[ratings6-4.0]",
+      "tests/test_review.py::test_calc_average_rating[ratings7-5.0]",
+      "tests/test_review.py::test_get_product_rating_summary"
+    ]
+  },
+  "status": "approval_pending",
+  "intake": {
+    "accepted": true,
+    "problems": [],
+    "output": {
+      "is_change_request": true,
+      "in_domain": true,
+      "symptom_quote": "상품별 리뷰 평점을 확인할 때 평균이 실제 리뷰 점수보다 훨씬 크게 표시되는 사례가 있습니다.",
+      "expected_behavior": "리뷰 평균 평점이 실제 리뷰 점수에 맞게 정확히 계산·표시되어야 함(별점이 한 건뿐인 상품은 평균이 해당 점수와 동일해야 함)",
+      "missing": [
+        "어떤 화면/기능 또는 API에서 확인했는지(상품 상세, 리뷰 목록, 내부 대시보드 등)",
+        "문제 발생한 상품 ID와 실제 리뷰 점수/건수, 화면에 표시된 평균 값",
+        "재현 절차와 조건(필터, 기간, 정렬, 페이지네이션 등)",
+        "발생 환경(운영/스테이징)과 발생 시각/빈도",
+        "최근 리뷰 등록·수정·삭제 직후 등 특정 동작 후 발생 여부 및 캐시 반영 지연 여부",
+        "영향 범위(일부 상품만/전상품)",
+        "확인에 필요한 계정/권한 정보(있다면)",
+        "관련 스크린샷 또는 로그 캡처"
+      ],
+      "reason": "리뷰 평균이 실제 점수보다 크게 표시된다는 구체적 증상이 있으며, 리뷰/상품 도메인은 대상 시스템 범위에 포함된다."
+    }
+  },
+  "analysis": {
+    "final_method": "review.calc_average_rating",
+    "model_top3": [
+      "review.calc_average_rating",
+      "review.validate_rating",
+      "review.get_product_rating_summary"
+    ],
+    "model_rank": 1,
+    "reason": "평균 평점이 실제보다 과대하게 표시되는 원인은 review.calc_average_rating의 산식 오류입니다. half-up 1자리 반올림을 정수 연산으로 구현해야 하는 곳에서, 분모로 나눠야 할 (count * 2)를 곱해버려 값이 급격히 커집니다. 현재 코드 scaled = (total * 20 + count) * (count * 2); return scaled / 10.0 로 되어 있어 [4]의 경우 16.2, 다수 리뷰에서는 수천 단위로 부풀려집니다. 올바른 구현은 scaled = (total * 20 + count) // (count * 2); return scaled / 10.0 입니다. 이 함수는 review.get_product_rating_summary에서 평균값으로 노출되므로 증상이 그대로 나타납니다. 과거 동일 함수의 산식·반올림 관련 장애 이력도 존재해 원인 함수로 확신할 수 있습니다. 검색된 업무 규칙(BIZ-*)은 없었으나, 함수 docstring과 과거 이력(HIS-*)에 따라 half-up 1자리 반올림 규칙을 기대값으로 삼았습니다.",
+    "disagreement": "",
+    "evidence": [
+      {
+        "kind": "caller",
+        "ref": "review.get_product_rating_summary -> review.calc_average_rating",
+        "note": "get_callers 결과로 호출 관계 확인"
+      },
+      {
+        "kind": "coverage",
+        "ref": "tests/test_review.py::test_calc_average_rating_invalid",
+        "note": "calc_average_rating 일부 라인 실행됨(유효성 오류 케이스)"
+      },
+      {
+        "kind": "test",
+        "ref": "repro_tests/test_review_avg_inflated.py::test_calc_average_rating_single_review",
+        "note": "원본 실패: 16.2 != 4.0 (단건 리뷰에서 과대 표시)"
+      },
+      {
+        "kind": "test",
+        "ref": "repro_tests/test_review_avg_inflated.py::test_calc_average_rating_half_up_threshold_up",
+        "note": "원본 실패: 6560.0 != 4.1 (4.05 → 4.1 기대)"
+      },
+      {
+        "kind": "test",
+        "ref": "repro_tests/test_review_avg_inflated.py::test_calc_average_rating_half_up_threshold_down",
+        "note": "원본 실패: 10225.0 != 4.0 (4.04 → 4.0 기대)"
+      },
+      {
+        "kind": "history",
+        "ref": "HIS-583d29c2",
+        "note": "과거 동일 함수 분모 상수(2→3)로 평균 왜곡 사례"
+      },
+      {
+        "kind": "history",
+        "ref": "HIS-fda4bdd9",
+        "note": "과거 동일 함수 반올림 방식 오류(half-up 미적용) 사례"
+      },
+      {
+        "kind": "history",
+        "ref": "HIS-97b88514",
+        "note": "요약 함수에서 평균 호출 누락 이력(참고)"
+      },
+      {
+        "kind": "code",
+        "ref": "review.calc_average_rating",
+        "note": "현재 구현: scaled = (total * 20 + count) * (count * 2) → 분모로 나눠야 할 항을 곱해 평균이 과대 계산됨"
+      }
+    ],
+    "history_ids": [
+      "HIS-583d29c2",
+      "HIS-fda4bdd9",
+      "HIS-97b88514"
+    ],
+    "repro_test_path": "repro_tests/test_review_avg_inflated.py",
+    "ticket_symptom": "별점이 한 건뿐인 상품에서도 평균이 4점을 크게 넘는 등, 고객 문의 응대와 상품 정보 확인에 혼선이 생깁니다.",
+    "symptom_check": "test_calc_average_rating_single_review: 평균 == 4.0 (원본은 16.2로 과대 표시)",
+    "confident": true,
+    "blocker": ""
+  },
+  "prediction": [
+    {
+      "method": "review.calc_average_rating",
+      "score": 2.0703,
+      "reasons": [
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.6768,
+          "contribution": 2.0889
+        },
+        {
+          "feature": "tfidf_sim",
+          "label": "티켓-코드 단어 겹침 (TF-IDF)",
+          "value": 0.0919,
+          "contribution": 0.2825
+        },
+        {
+          "feature": "trace_last",
+          "label": "스택트레이스의 예외 발생 위치",
+          "value": 0.0,
+          "contribution": 0.0047
+        }
+      ]
+    },
+    {
+      "method": "review.validate_rating",
+      "score": 0.6034,
+      "reasons": [
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.6555,
+          "contribution": 1.268
+        },
+        {
+          "feature": "trace_last",
+          "label": "스택트레이스의 예외 발생 위치",
+          "value": 0.0,
+          "contribution": 0.0038
+        },
+        {
+          "feature": "trace_module",
+          "label": "스택트레이스에 같은 모듈이 나옴",
+          "value": 0.0,
+          "contribution": 0.0016
+        }
+      ]
+    },
+    {
+      "method": "review.get_product_rating_summary",
+      "score": 0.3892,
+      "reasons": [
+        {
+          "feature": "tfidf_sim",
+          "label": "티켓-코드 단어 겹침 (TF-IDF)",
+          "value": 0.0806,
+          "contribution": 0.2482
+        },
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.6294,
+          "contribution": 0.1604
+        },
+        {
+          "feature": "complexity",
+          "label": "함수 분기 복잡도",
+          "value": 2.0,
+          "contribution": 0.079
+        }
+      ]
+    }
+  ],
+  "prediction_signal": {
+    "top1": 2.0703,
+    "emb_max": 0.6768,
+    "tfidf_max": 0.0919,
+    "low": false,
+    "reasons": [],
+    "thresholds": {
+      "top1": -1.8492,
+      "emb_max": 0.5875,
+      "tfidf_max": 0.0656
+    }
+  },
+  "repro_verified": true,
+  "analysis_tries": 1,
+  "attempts": [
+    {
+      "number": 1,
+      "fix": {
+        "method": "review.calc_average_rating",
+        "patch_summary": "평균 평점 산식의 반올림 구현 오류를 수정했습니다. 분모로 나눠야 할 (count * 2)를 곱해 값이 과대 계산되던 부분을, docstring의 half-up 1자리 반올림 규칙에 맞게 정수 나눗셈으로 계산하도록 변경했습니다. 기존: (total * 20 + count) * (count * 2) → 수정: (total * 20 + count) // (count * 2). 이 식은 floor((20*total + count) / (2*count))으로, (total/count)의 소수 첫째 자리 half-up 반올림 결과를 정수(1자리 스케일)로 얻는 표준 방식입니다. 반환은 기존과 동일하게 10.0으로 나눠 1자리 소수로 표시하며, 리뷰 없음(0.0) 등 가장자리 동작은 유지됩니다. 과거 동일 유형 장애 이력(HIS-583d29c2, HIS-fda4bdd9, HIS-97b88514)을 근거로 반영했습니다.",
+        "rule_ids": [],
+        "history_ids": [
+          "HIS-583d29c2",
+          "HIS-fda4bdd9",
+          "HIS-97b88514"
+        ]
+      },
+      "diff": "--- a/src/order_settlement/review.py\n+++ b/src/order_settlement/review.py\n@@ -92,5 +92,5 @@\n     total = sum(validate_rating(r) for r in ratings)\n     count = len(ratings)\n-    scaled = (total * 20 + count) * (count * 2)\n+    scaled = (total * 20 + count) // (count * 2)\n     return scaled / 10.0\n \n",
+      "before_code": "def calc_average_rating(ratings):\n    # type: (List[int]) -> float\n    \"\"\"평균 평점. 소수 둘째 자리에서 반올림(half-up)해 첫째 자리까지 표시.\n\n    예: 4.05 -> 4.1, 4.04 -> 4.0. 리뷰가 없으면 0.0.\n    \"\"\"\n    if not ratings:\n        return 0.0\n    total = sum(validate_rating(r) for r in ratings)\n    count = len(ratings)\n    scaled = (total * 20 + count) * (count * 2)\n    return scaled / 10.0",
+      "after_code": "def calc_average_rating(ratings):\n    # type: (List[int]) -> float\n    \"\"\"평균 평점. 소수 둘째 자리에서 반올림(half-up)해 첫째 자리까지 표시.\n\n    예: 4.05 -> 4.1, 4.04 -> 4.0. 리뷰가 없으면 0.0.\n    \"\"\"\n    if not ratings:\n        return 0.0\n    total = sum(validate_rating(r) for r in ratings)\n    count = len(ratings)\n    scaled = (total * 20 + count) // (count * 2)\n    return scaled / 10.0",
+      "attack": {
+        "summary": "[경계값] 경계값(소수 둘째 자리 half-up에 따른 바로 아래/같음/위) 및 0·단건을 집중 검증했습니다. 패치 결과는 기대 반올림(문서화된 규칙)에 부합했고, 결함 영역 밖(빈 목록)에서 회귀도 관찰되지 않았습니다. 확인된 수정 미달/회귀 없음.\n[타입·빈 값] 타입·빈 값 관점에서 수정 미달이나 회귀를 재현하지 못했습니다. 빈/Falsey 입력은 여전히 0.0을 반환하고, 잘못된 타입·범위 외 값은 동일하게 ValueError가 발생합니다. 결함 영역(유효한 비어있지 않은 리뷰 목록) 밖의 넓은 입력 분포에서도 원본과 수정본은 동일하게 동작했습니다.\n[호출부 경로] 호출부 경로(angle=callers)로만 공격을 수행해야 하나, 테스트용 인메모리 DB 스키마에 reviews 테이블이 없어 caller 실행이 모두 OperationalError로 실패했습니다. 이 환경에서는 호출부를 통한 검증이 불가하여 수정 미달·회귀 여부를 확인할 수 없었습니다. reviews 테이블 스키마를 테스트 DB에 포함(또는 초기화 루틴 제공)해 주시면, 호출부 기반으로 경계값 입력(평균 4.04→4.0, 4.05→4.1 등)과 비결함 영역(리뷰 없음/비노출만 존재)에서 재검증을 이어가겠습니다.",
+        "attempts": [
+          "[경계값] 과거 성공 공격 검색: 해당 함수 사례 없음",
+          "[경계값] 보조 함수 review.validate_rating와 상수 MIN_RATING=1, MAX_RATING=5 확인",
+          "[경계값] 경계 아래 4.04(24×4+1×5, N=25) → 패치 4.0, 원본 과대(10225.0)",
+          "[경계값] 경계 값 4.05(19×4+1×5, N=20) → 패치 4.1, 원본 과대(6560.0)",
+          "[경계값] 상단 경계 아래 4.94(49×5+1×2, N=50) → 패치 4.9, 원본 과대",
+          "[경계값] 상단 경계 값 4.95(19×5+1×4, N=20) → 패치 5.0, 원본 과대(8000.0)",
+          "[경계값] 하단 경계 아래 1.04(24×1+1×2, N=25) → 패치 1.0, 원본 과대(2725.0)",
+          "[경계값] 하단 경계 값 1.05(19×1+1×2, N=20) → 패치 1.1, 원본 과대(1760.0)",
+          "[경계값] 단일 리뷰 [5] → 패치 5.0, 원본 과대(20.2); [1] → 패치 1.0, 원본 과대(4.2)",
+          "[경계값] 빈 목록 [] → 원본과 패치 동일 0.0",
+          "[경계값] 회귀 검사(property_attack): 결함 영역 밖(빈 목록)에서 원본=패치, 차이 없음",
+          "[타입·빈 값] 컨텍스트의 과거 공격 기록 검토: 동일 함수에 대한 성공 사례 없음",
+          "[타입·빈 값] 수정 함수와 호출부 코드 확인: validate_rating가 int(1..5)만 허용, bool/비정수/범위외는 ValueError 발생",
+          "[타입·빈 값] 빈/Falsy 입력 미달·회귀 점검: ratings=None → 0.0 (원본=수정 동일)",
+          "[타입·빈 값] 빈 문자열 ratings=\"\" → 0.0 (동일)",
+          "[타입·빈 값] 빈 리스트 ratings=[] → 0.0 (동일)",
+          "[타입·빈 값] 잘못된 타입 원소 포함 리스트: [None], [True], [\"5\"], [\"x\"] 등 → ValueError (동일)",
+          "[타입·빈 값] 범위 경계 밖 값: [0], [-1], [6] → ValueError (동일)",
+          "[타입·빈 값] 비리스트 Falsy 값: 0, False, {} → 0.0 (동일)",
+          "[타입·빈 값] property_attack로 결함 영역(유효 리뷰 리스트) 밖의 다양한 타입/빈 값 조합에서 원본/수정 비교: 불일치 0건",
+          "[호출부 경로] 공격 메모리 조회: 동일 함수 과거 성공 사례 없음",
+          "[호출부 경로] 호출부 코드 확인: review.get_product_rating_summary가 DB에서 VISIBLE 리뷰만 모아 calc_average_rating과 calc_rating_distribution에 전달",
+          "[호출부 경로] run_diff: reviews 테이블에 A 상품 4점×19, 5점×1(VISIBLE) + 노이즈(HIDDEN/다른 상품) 구성 → 두 버전 모두 OperationalError: no such table: reviews",
+          "[호출부 경로] run_diff: reviews 테이블에 X 상품 5점×1(VISIBLE) → 두 버전 모두 OperationalError: no such table: reviews",
+          "[호출부 경로] run_diff: reviews 테이블 미존재(빈 DB)에서 X 상품 조회 → 두 버전 모두 OperationalError: no such table: reviews",
+          "[호출부 경로] property_attack: caller(review.get_product_rating_summary) 대상, DB에 reviews 행 고정(X,5,VISIBLE) + product_id 샘플(X/Y/Z)로 회귀 탐색 → 프레임워크 상 불일치 보고 없음(테이블 미생성으로 실행 자체가 유효하지 않음으로 판단)"
+        ],
+        "findings": [],
+        "saved_to_memory": 0,
+        "error": null,
+        "planned_rounds": 3,
+        "rounds": [
+          {
+            "angle": "boundary",
+            "label": "경계값",
+            "summary": "경계값(소수 둘째 자리 half-up에 따른 바로 아래/같음/위) 및 0·단건을 집중 검증했습니다. 패치 결과는 기대 반올림(문서화된 규칙)에 부합했고, 결함 영역 밖(빈 목록)에서 회귀도 관찰되지 않았습니다. 확인된 수정 미달/회귀 없음.",
+            "attempts": [
+              "과거 성공 공격 검색: 해당 함수 사례 없음",
+              "보조 함수 review.validate_rating와 상수 MIN_RATING=1, MAX_RATING=5 확인",
+              "경계 아래 4.04(24×4+1×5, N=25) → 패치 4.0, 원본 과대(10225.0)",
+              "경계 값 4.05(19×4+1×5, N=20) → 패치 4.1, 원본 과대(6560.0)",
+              "상단 경계 아래 4.94(49×5+1×2, N=50) → 패치 4.9, 원본 과대",
+              "상단 경계 값 4.95(19×5+1×4, N=20) → 패치 5.0, 원본 과대(8000.0)",
+              "하단 경계 아래 1.04(24×1+1×2, N=25) → 패치 1.0, 원본 과대(2725.0)",
+              "하단 경계 값 1.05(19×1+1×2, N=20) → 패치 1.1, 원본 과대(1760.0)",
+              "단일 리뷰 [5] → 패치 5.0, 원본 과대(20.2); [1] → 패치 1.0, 원본 과대(4.2)",
+              "빈 목록 [] → 원본과 패치 동일 0.0",
+              "회귀 검사(property_attack): 결함 영역 밖(빈 목록)에서 원본=패치, 차이 없음"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          },
+          {
+            "angle": "types",
+            "label": "타입·빈 값",
+            "summary": "타입·빈 값 관점에서 수정 미달이나 회귀를 재현하지 못했습니다. 빈/Falsey 입력은 여전히 0.0을 반환하고, 잘못된 타입·범위 외 값은 동일하게 ValueError가 발생합니다. 결함 영역(유효한 비어있지 않은 리뷰 목록) 밖의 넓은 입력 분포에서도 원본과 수정본은 동일하게 동작했습니다.",
+            "attempts": [
+              "컨텍스트의 과거 공격 기록 검토: 동일 함수에 대한 성공 사례 없음",
+              "수정 함수와 호출부 코드 확인: validate_rating가 int(1..5)만 허용, bool/비정수/범위외는 ValueError 발생",
+              "빈/Falsy 입력 미달·회귀 점검: ratings=None → 0.0 (원본=수정 동일)",
+              "빈 문자열 ratings=\"\" → 0.0 (동일)",
+              "빈 리스트 ratings=[] → 0.0 (동일)",
+              "잘못된 타입 원소 포함 리스트: [None], [True], [\"5\"], [\"x\"] 등 → ValueError (동일)",
+              "범위 경계 밖 값: [0], [-1], [6] → ValueError (동일)",
+              "비리스트 Falsy 값: 0, False, {} → 0.0 (동일)",
+              "property_attack로 결함 영역(유효 리뷰 리스트) 밖의 다양한 타입/빈 값 조합에서 원본/수정 비교: 불일치 0건"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          },
+          {
+            "angle": "callers",
+            "label": "호출부 경로",
+            "summary": "호출부 경로(angle=callers)로만 공격을 수행해야 하나, 테스트용 인메모리 DB 스키마에 reviews 테이블이 없어 caller 실행이 모두 OperationalError로 실패했습니다. 이 환경에서는 호출부를 통한 검증이 불가하여 수정 미달·회귀 여부를 확인할 수 없었습니다. reviews 테이블 스키마를 테스트 DB에 포함(또는 초기화 루틴 제공)해 주시면, 호출부 기반으로 경계값 입력(평균 4.04→4.0, 4.05→4.1 등)과 비결함 영역(리뷰 없음/비노출만 존재)에서 재검증을 이어가겠습니다.",
+            "attempts": [
+              "공격 메모리 조회: 동일 함수 과거 성공 사례 없음",
+              "호출부 코드 확인: review.get_product_rating_summary가 DB에서 VISIBLE 리뷰만 모아 calc_average_rating과 calc_rating_distribution에 전달",
+              "run_diff: reviews 테이블에 A 상품 4점×19, 5점×1(VISIBLE) + 노이즈(HIDDEN/다른 상품) 구성 → 두 버전 모두 OperationalError: no such table: reviews",
+              "run_diff: reviews 테이블에 X 상품 5점×1(VISIBLE) → 두 버전 모두 OperationalError: no such table: reviews",
+              "run_diff: reviews 테이블 미존재(빈 DB)에서 X 상품 조회 → 두 버전 모두 OperationalError: no such table: reviews",
+              "property_attack: caller(review.get_product_rating_summary) 대상, DB에 reviews 행 고정(X,5,VISIBLE) + product_id 샘플(X/Y/Z)로 회귀 탐색 → 프레임워크 상 불일치 보고 없음(테이블 미생성으로 실행 자체가 유효하지 않음으로 판단)"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          }
+        ],
+        "escalation": ""
+      },
+      "judge": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "intake_accepted",
+            "passed": true,
+            "detail": "증상: 상품별 리뷰 평점을 확인할 때 평균이 실제 리뷰 점수보다 훨씬 크게 표시되는 사례가 있습니다.",
+            "data": {}
+          },
+          {
+            "name": "ticket_symptom_linked",
+            "passed": true,
+            "detail": "증상 '별점이 한 건뿐인 상품에서도 평균이 4점을 크게 넘는 등, 고객 문의 응대와 상품 정보 확인에 혼선이 생깁니다.' → test_calc_average_rating_single_review: 평균 == 4.0 (원본은 16.2로 과대 표시)",
+            "data": {}
+          },
+          {
+            "name": "repro_original_fails",
+            "passed": true,
+            "detail": "통과 0, 실패 3: ['repro_tests/test_review_avg_inflated.py::test_calc_average_rating_single_review', 'repro_tests/test_review_avg_inflated.py::test_calc_average_rating_half_up_threshold_up', 'repro_tests/test_review_avg_inflated.py::test_calc_average_rating_half_up_threshold_down']",
+            "data": {}
+          },
+          {
+            "name": "repro_patched_passes",
+            "passed": true,
+            "detail": "통과 3, 실패 0",
+            "data": {}
+          },
+          {
+            "name": "existing_tests_pass",
+            "passed": true,
+            "detail": "통과 1136, 실패 0",
+            "data": {
+              "passed": 1136,
+              "failed": 0
+            }
+          },
+          {
+            "name": "change_scope",
+            "passed": true,
+            "detail": "대상 함수만 변경",
+            "data": {}
+          },
+          {
+            "name": "reference_property",
+            "passed": null,
+            "detail": "입력 생성 규칙 없음 — Hypothesis 비교 미평가",
+            "data": {}
+          },
+          {
+            "name": "attack_findings_rechecked",
+            "passed": null,
+            "detail": "공격이 제안한 입력 없음",
+            "data": {}
+          }
+        ]
+      },
+      "error": null
+    }
+  ],
+  "human_review_reason": null,
+  "decision": null,
+  "answer_check": {
+    "answer_method": "review.calc_average_rating",
+    "agent_method": "review.calc_average_rating",
+    "tests": {
+      "passed": true,
+      "detail": "통과 9, 실패 0"
+    },
+    "patch_ok": true
+  },
+  "tokens_used": 332217,
+  "run_ids": [
+    "DEMO-B-20261022-152525"
+  ],
+  "updated_at": "2026-10-22T15:30:57"
+}

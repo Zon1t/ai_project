@@ -153,13 +153,18 @@ def test_intake_check_reflects_saved_result():
     assert check.passed is False and "본문이 너무 짧음" in check.detail
 
 
-def test_old_state_without_new_fields_loads():
-    """v1.2 이전 재생 데이터(분석에 새 필드 없음)도 그대로 불러온다."""
-    for tid in ui.replay_tickets():
-        state = TicketState.load(config.REPLAY_DIR / tid / config.STATE_FILENAME)
-        assert state.intake is None
-        if state.analysis:
-            assert state.analysis.confident is True and state.analysis.ticket_symptom == ""
+def test_old_state_without_new_fields_loads(tmp_path):
+    """v1.2 이전에 저장한 상태(접수 검사·분석 새 필드 없음)도 그대로 불러온다."""
+    data = TicketState(ticket=S1, analysis=analysis()).model_dump(mode="json")
+    data.pop("intake"), data.pop("prediction_signal")
+    for key in ("ticket_symptom", "symptom_check", "confident", "blocker"):
+        data["analysis"].pop(key)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    state = TicketState.load(path)
+    assert state.intake is None and state.prediction_signal is None
+    assert state.analysis.confident is True and state.analysis.ticket_symptom == ""
+    assert symptom_check(S1, state.analysis).passed is None  # 판정에서는 미평가
 
 
 def test_analysis_schema_requires_new_fields():

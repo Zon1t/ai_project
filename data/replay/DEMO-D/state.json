@@ -1,0 +1,234 @@
+{
+  "ticket": {
+    "ticket_id": "DEMO-D",
+    "type": "security",
+    "title": "시큐어코딩 진단: 이메일 조회 SQL 문자열 결합",
+    "body": "시큐어코딩 점검 결과, 고객 이메일로 조회하는 기능에서 입력값을 SQL 문장에 그대로 붙여 조회하고 있습니다. 조치 바랍니다.",
+    "scenario": "시연 D",
+    "method": "customer_dao.find_by_email",
+    "judge": null,
+    "demo_case": "D",
+    "answer_method": null,
+    "answer_tests": []
+  },
+  "status": "approval_pending",
+  "intake": {
+    "accepted": true,
+    "problems": [],
+    "output": {
+      "is_change_request": true,
+      "in_domain": true,
+      "symptom_quote": "고객 이메일로 조회하는 기능에서 입력값을 SQL 문장에 그대로 붙여 조회하고 있습니다.",
+      "expected_behavior": "입력값을 SQL 문장에 그대로 붙이지 않아야 함.",
+      "missing": [],
+      "reason": "보안 진단 결과로 SQL 문자열 결합 취약점 조치를 요청하고 있으며, 고객(고객 이메일 조회) 관련 기능으로 대상 시스템 범위에 해당한다."
+    }
+  },
+  "analysis": null,
+  "prediction": [],
+  "prediction_signal": null,
+  "repro_verified": false,
+  "analysis_tries": 0,
+  "attempts": [
+    {
+      "number": 1,
+      "fix": {
+        "method": "customer_dao.find_by_email",
+        "patch_summary": "이메일 입력값을 f-string으로 SQL에 직접 결합하던 코드를 파라미터 바인딩으로 변경했습니다. 구체적으로, \"SELECT * FROM customers WHERE email = ?\" 형태로 수정하고 파라미터 튜플 (email,)을 db.query_one에 전달하여 SQL 인젝션 위험을 제거했습니다 (SEC-SQL-01). 정상 입력의 조회 결과(행, 순서)는 그대로 유지되며, check_security(method=customer_dao.find_by_email) 재검사 결과 위반이 0건으로 해소되었습니다 (SEC-SQL-01).",
+        "rule_ids": [
+          "SEC-SQL-01"
+        ],
+        "history_ids": []
+      },
+      "diff": "--- a/src/order_settlement/customer_dao.py\n+++ b/src/order_settlement/customer_dao.py\n@@ -36,6 +36,6 @@\n \n def find_by_email(conn, email):\n-    sql = f\"SELECT * FROM customers WHERE email = '{email}'\"\n-    return db.query_one(conn, sql)\n+    sql = \"SELECT * FROM customers WHERE email = ?\"\n+    return db.query_one(conn, sql, (email,))\n \n \n",
+      "before_code": "def find_by_email(conn, email):\n    sql = f\"SELECT * FROM customers WHERE email = '{email}'\"\n    return db.query_one(conn, sql)",
+      "after_code": "def find_by_email(conn, email):\n    sql = \"SELECT * FROM customers WHERE email = ?\"\n    return db.query_one(conn, sql, (email,))",
+      "attack": {
+        "summary": "[경계값] 경계값 중심으로 이메일 입력을 다양하게 공격한 결과, 파라미터 바인딩으로 인젝션이 차단되었고 정상 입력의 조회 결과는 유지되었습니다. 수정 미달 및 회귀 모두 발견되지 않았습니다.\n[타입·빈 값] 파라미터 바인딩으로 SEC-SQL-01 취약점은 제거되었으나, 비정상 타입 입력(None, list)에서 기존 f-string의 암묵적 문자열화 동작이 사라져 결과가 달라지거나 예외가 발생하는 회귀가 확인되었다. 정상 이메일 입력의 조회 결과는 유지되었다.\n[호출부 경로] 호출부 경로 관점에서 테스트한 결과, 파라미터 바인딩 변경으로 인해 정상 동작이 바뀌는 현상이나 위반 지속 징후를 발견하지 못했습니다. 정상 입력의 조회/중복 검사 결과가 원본과 동일하며, 광범위 회귀 테스트에서도 차이가 없습니다.",
+        "attempts": [
+          "[경계값] 과거 공격 없음(컨텍스트 제공 attack_memory 비어있음) 확인",
+          "[경계값] 패치된 함수와 호출부 코드 검토: f-string 결합 → 파라미터 바인딩(?, (email,)) 변경 확인",
+          "[경계값] 정상 이메일(a@x.com) 조회: 원본과 수정본 동일 행 반환 확인",
+          "[경계값] 따옴표 포함 이메일(o'b@x.com) 조회: 원본 OperationalError, 수정본 정상 단일 행 반환 확인(경계: 특수문자)",
+          "[경계값] 빈 문자열(\"\") 조회: 원본/수정본 모두 None 반환 확인(경계: 빈값)",
+          "[경계값] 인젝션 패턴 입력(\"x' OR '1'='1\"): 원본 첫 행 반환 취약, 수정본 None 반환으로 차단 확인(경계: 악성 토큰)",
+          "[경계값] 회귀 확인(property_attack): 안전한 이메일 표본 집합에서 원본과 수정본 결과 일치(불일치 0건)",
+          "[타입·빈 값] 과거 공격 기록 확인: 해당 없음",
+          "[타입·빈 값] 정상 입력 a@x.com으로 원본/수정본 결과 동일 확인",
+          "[타입·빈 값] 인젝션 문자열 ' OR 1=1 -- 입력: 원본은 첫 행을 반환, 수정본은 None (보안 수정 효과 확인)",
+          "[타입·빈 값] 작은따옴표 포함 이메일 o'reilly@example.com: 원본은 SQL 구문 오류, 수정본은 정상 조회 (보안 수정 효과 확인)",
+          "[타입·빈 값] None 입력 + 이메일이 'None'인 행 존재: 원본은 해당 행을 반환, 수정본은 None (회귀 확인)",
+          "[타입·빈 값] 리스트 [] 입력 + 이메일이 '[]'인 행 존재: 원본은 해당 행을 반환, 수정본은 바인딩 오류 예외 (회귀 확인)",
+          "[타입·빈 값] property_attack로 비인젝션 값 전반 탐색: None, []에서 동일 차이 재현",
+          "[호출부 경로] 호출부 customer.register_customer를 통해 중복 이메일(a@x.com) 시나리오 실행: 원본/수정본 모두 동일하게 ValueError(이미 가입된 이메일) 발생",
+          "[호출부 경로] 호출부 customer.register_customer를 통해 신규 이메일(new@x.com) 등록 시나리오 실행: 원본/수정본 동일하게 성공(반환 1)",
+          "[호출부 경로] 호출부 customer.register_customer에서 SQL 인젝션 유사 이메일(o'hara@example.com) 입력: 원본/수정본 모두 이메일 형식 오류로 차단",
+          "[호출부 경로] 회귀 탐색(property_attack): conn 빈 DB 고정, 정상 이메일 샘플과 유효한 전화번호 조합으로 100건 실행 — 원본/수정본 모두 동일"
+        ],
+        "findings": [
+          {
+            "kind": "regression",
+            "method": "customer_dao.find_by_email",
+            "input_json": "[{\"$db\":{\"customers\":[{\"name\":\"NoneUser\",\"email\":\"None\",\"phone\":\"010-9999-0000\",\"grade\":\"BASIC\"}]}}, null]",
+            "expected_json": "{\"id\": 1, \"name\": \"NoneUser\", \"email\": \"None\", \"phone\": \"010-9999-0000\", \"grade\": \"BASIC\", \"created_at\": null}",
+            "rule_id": "",
+            "explanation": "이메일 자리에 None이 들어오면, 원본은 f-string으로 \"'None'\"이 되어 문자열 \"None\"과 일치하는 행을 반환했다. 수정본은 파라미터 바인딩으로 None이 NULL로 바인딩되어 WHERE email = NULL 비교가 성립하지 않아 행을 찾지 못한다. 취약점 수정과 무관한 입력 타입 변화로 기존 동작이 바뀐 회귀다.",
+            "original": {
+              "ok": true,
+              "value": {
+                "id": 1,
+                "name": "NoneUser",
+                "email": "None",
+                "phone": "010-9999-0000",
+                "grade": "BASIC",
+                "created_at": null
+              }
+            },
+            "patched": {
+              "ok": true,
+              "value": null
+            },
+            "verified": true,
+            "check": "수정본이 원본과 다름",
+            "angle": "types"
+          },
+          {
+            "kind": "regression",
+            "method": "customer_dao.find_by_email",
+            "input_json": "[{\"$db\":{\"customers\":[{\"name\":\"ListUser\",\"email\":\"[]\",\"phone\":\"010-0000-0000\",\"grade\":\"BASIC\"}]}}, []]",
+            "expected_json": "{\"id\": 1, \"name\": \"ListUser\", \"email\": \"[]\", \"phone\": \"010-0000-0000\", \"grade\": \"BASIC\", \"created_at\": null}",
+            "rule_id": "",
+            "explanation": "이메일 자리에 리스트([])가 들어오면, 원본은 f-string으로 \"'[]'\"가 되어 문자열 \"[]\"와 일치하는 행을 반환했다. 수정본은 파라미터 바인딩 과정에서 list 타입을 바인딩하지 못해 ProgrammingError 예외를 발생시킨다. 보안 결함 영역 밖의 입력에서 원본과 다르게 예외를 내는 회귀다.",
+            "original": {
+              "ok": true,
+              "value": {
+                "id": 1,
+                "name": "ListUser",
+                "email": "[]",
+                "phone": "010-0000-0000",
+                "grade": "BASIC",
+                "created_at": null
+              }
+            },
+            "patched": {
+              "ok": false,
+              "exception": "ProgrammingError: Error binding parameter 1: type 'list' is not supported"
+            },
+            "verified": true,
+            "check": "수정본이 원본과 다름",
+            "angle": "types"
+          }
+        ],
+        "saved_to_memory": 2,
+        "error": null,
+        "planned_rounds": 3,
+        "rounds": [
+          {
+            "angle": "boundary",
+            "label": "경계값",
+            "summary": "경계값 중심으로 이메일 입력을 다양하게 공격한 결과, 파라미터 바인딩으로 인젝션이 차단되었고 정상 입력의 조회 결과는 유지되었습니다. 수정 미달 및 회귀 모두 발견되지 않았습니다.",
+            "attempts": [
+              "과거 공격 없음(컨텍스트 제공 attack_memory 비어있음) 확인",
+              "패치된 함수와 호출부 코드 검토: f-string 결합 → 파라미터 바인딩(?, (email,)) 변경 확인",
+              "정상 이메일(a@x.com) 조회: 원본과 수정본 동일 행 반환 확인",
+              "따옴표 포함 이메일(o'b@x.com) 조회: 원본 OperationalError, 수정본 정상 단일 행 반환 확인(경계: 특수문자)",
+              "빈 문자열(\"\") 조회: 원본/수정본 모두 None 반환 확인(경계: 빈값)",
+              "인젝션 패턴 입력(\"x' OR '1'='1\"): 원본 첫 행 반환 취약, 수정본 None 반환으로 차단 확인(경계: 악성 토큰)",
+              "회귀 확인(property_attack): 안전한 이메일 표본 집합에서 원본과 수정본 결과 일치(불일치 0건)"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          },
+          {
+            "angle": "types",
+            "label": "타입·빈 값",
+            "summary": "파라미터 바인딩으로 SEC-SQL-01 취약점은 제거되었으나, 비정상 타입 입력(None, list)에서 기존 f-string의 암묵적 문자열화 동작이 사라져 결과가 달라지거나 예외가 발생하는 회귀가 확인되었다. 정상 이메일 입력의 조회 결과는 유지되었다.",
+            "attempts": [
+              "과거 공격 기록 확인: 해당 없음",
+              "정상 입력 a@x.com으로 원본/수정본 결과 동일 확인",
+              "인젝션 문자열 ' OR 1=1 -- 입력: 원본은 첫 행을 반환, 수정본은 None (보안 수정 효과 확인)",
+              "작은따옴표 포함 이메일 o'reilly@example.com: 원본은 SQL 구문 오류, 수정본은 정상 조회 (보안 수정 효과 확인)",
+              "None 입력 + 이메일이 'None'인 행 존재: 원본은 해당 행을 반환, 수정본은 None (회귀 확인)",
+              "리스트 [] 입력 + 이메일이 '[]'인 행 존재: 원본은 해당 행을 반환, 수정본은 바인딩 오류 예외 (회귀 확인)",
+              "property_attack로 비인젝션 값 전반 탐색: None, []에서 동일 차이 재현"
+            ],
+            "findings": 2,
+            "verified": 2,
+            "error": null
+          },
+          {
+            "angle": "callers",
+            "label": "호출부 경로",
+            "summary": "호출부 경로 관점에서 테스트한 결과, 파라미터 바인딩 변경으로 인해 정상 동작이 바뀌는 현상이나 위반 지속 징후를 발견하지 못했습니다. 정상 입력의 조회/중복 검사 결과가 원본과 동일하며, 광범위 회귀 테스트에서도 차이가 없습니다.",
+            "attempts": [
+              "호출부 customer.register_customer를 통해 중복 이메일(a@x.com) 시나리오 실행: 원본/수정본 모두 동일하게 ValueError(이미 가입된 이메일) 발생",
+              "호출부 customer.register_customer를 통해 신규 이메일(new@x.com) 등록 시나리오 실행: 원본/수정본 동일하게 성공(반환 1)",
+              "호출부 customer.register_customer에서 SQL 인젝션 유사 이메일(o'hara@example.com) 입력: 원본/수정본 모두 이메일 형식 오류로 차단",
+              "회귀 탐색(property_attack): conn 빈 DB 고정, 정상 이메일 샘플과 유효한 전화번호 조합으로 100건 실행 — 원본/수정본 모두 동일"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          }
+        ],
+        "escalation": ""
+      },
+      "judge": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "intake_accepted",
+            "passed": true,
+            "detail": "증상: 고객 이메일로 조회하는 기능에서 입력값을 SQL 문장에 그대로 붙여 조회하고 있습니다.",
+            "data": {}
+          },
+          {
+            "name": "security_zero",
+            "passed": true,
+            "detail": "0건",
+            "data": {
+              "findings": 0
+            }
+          },
+          {
+            "name": "attack_neutralized",
+            "passed": null,
+            "detail": "판정 명세 없음",
+            "data": {}
+          },
+          {
+            "name": "attack_findings_rechecked",
+            "passed": null,
+            "detail": "정답 구현 없음 — 공격 입력 재판정 미평가",
+            "data": {}
+          },
+          {
+            "name": "existing_tests_pass",
+            "passed": true,
+            "detail": "통과 1145, 실패 0",
+            "data": {
+              "passed": 1145,
+              "failed": 0
+            }
+          },
+          {
+            "name": "change_scope",
+            "passed": true,
+            "detail": "대상 함수만 변경",
+            "data": {}
+          }
+        ]
+      },
+      "error": null
+    }
+  ],
+  "human_review_reason": null,
+  "decision": null,
+  "answer_check": null,
+  "tokens_used": 181316,
+  "run_ids": [
+    "DEMO-D-20261022-153652"
+  ],
+  "updated_at": "2026-10-22T15:39:35"
+}

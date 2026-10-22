@@ -242,11 +242,27 @@
         }
       ],
       "hidden_tests": []
-    }
+    },
+    "demo_case": null,
+    "answer_method": null,
+    "answer_tests": []
   },
   "status": "approval_pending",
+  "intake": {
+    "accepted": true,
+    "problems": [],
+    "output": {
+      "is_change_request": true,
+      "in_domain": true,
+      "symptom_quote": "시큐어코딩 진단 결과, customer_dao.find_by_name에서 f-string으로 SQL을 조립하고 있습니다. 조치 바랍니다.",
+      "expected_behavior": "customer_dao.find_by_name에서 f-string으로 SQL을 조립하지 않아야 함",
+      "missing": [],
+      "reason": "보안 진단 결과에 따른 구체 함수 대상의 조치 요청으로, 시스템 코드의 보안 수정 요청에 해당한다."
+    }
+  },
   "analysis": null,
   "prediction": [],
+  "prediction_signal": null,
   "repro_verified": false,
   "analysis_tries": 0,
   "attempts": [
@@ -254,58 +270,56 @@
       "number": 1,
       "fix": {
         "method": "customer_dao.find_by_name",
-        "patch_summary": "SQL 인젝션 위험을 제거하고(SEC-SQL-01), 민감정보 로그 유출 가능성을 차단(SEC-LOG-03)하기 위한 보안 패치.\n- f-string으로 SQL을 조립하던 코드를 자리표시자 ?와 파라미터 튜플 (name,)을 사용하는 바인딩 방식으로 변경하여 SQL 인젝션 가능성을 제거했습니다 (SEC-SQL-01). ORDER BY id는 그대로 유지하여 조회 결과의 행·정렬 순서는 원본과 동일합니다.\n- SQL 전체 문자열을 로그로 남기던 코드를 제거하여 SQL/조회 결과 관련 민감정보가 로그에 남지 않도록 했습니다 (SEC-LOG-03).",
+        "patch_summary": "SQL을 f-string으로 조립하던 부분을 파라미터 바인딩으로 변경하여 SQL 인젝션 위험을 제거했고(SEC-SQL-01), SQL 전문 및 개인정보가 로그에 남지 않도록 디버그 로그에서 SQL 문자열과 값을 제거해 일반 메시지만 남기도록 변경했습니다(SEC-LOG-03). 쿼리의 ORDER BY id와 조회 로직은 그대로 유지해 정상 입력의 결과(행, 순서)가 바뀌지 않음을 확인했습니다. 보안 점검(check_security) 0건, 전체 테스트 통과를 확인했습니다.",
         "rule_ids": [
           "SEC-SQL-01",
           "SEC-LOG-03"
         ],
         "history_ids": []
       },
-      "diff": "--- a/src/order_settlement/customer_dao.py\n+++ b/src/order_settlement/customer_dao.py\n@@ -30,7 +30,7 @@\n     # type: (object, str) -> List[Dict]\n     \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n-    sql = f\"SELECT * FROM customers WHERE name = '{name}' ORDER BY id\"\n-    logger.debug(\"find_by_name: %s\", sql)\n-    return db.query_all(conn, sql)\n+    sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"\n+    rows = db.query_all(conn, sql, (name,))\n+    return rows\n \n \n",
+      "diff": "--- a/src/order_settlement/customer_dao.py\n+++ b/src/order_settlement/customer_dao.py\n@@ -30,7 +30,7 @@\n     # type: (object, str) -> List[Dict]\n     \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n-    sql = f\"SELECT * FROM customers WHERE name = '{name}' ORDER BY id\"\n-    logger.debug(\"find_by_name: %s\", sql)\n-    return db.query_all(conn, sql)\n+    sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"\n+    logger.debug(\"find_by_name called\")\n+    return db.query_all(conn, sql, (name,))\n \n \n",
+      "before_code": "def find_by_name(conn, name):\n    # type: (object, str) -> List[Dict]\n    \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n    sql = f\"SELECT * FROM customers WHERE name = '{name}' ORDER BY id\"\n    logger.debug(\"find_by_name: %s\", sql)\n    return db.query_all(conn, sql)",
+      "after_code": "def find_by_name(conn, name):\n    # type: (object, str) -> List[Dict]\n    \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n    sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"\n    logger.debug(\"find_by_name called\")\n    return db.query_all(conn, sql, (name,))",
       "attack": {
-        "summary": "[경계값] SEC-SQL-01에 따른 파라미터 바인딩이 적용되어 인젝션 입력에 대한 동작이 올바르게 개선되었고, 정상 입력에서는 원본과 동일한 결과가 유지되었습니다. SEC-LOG-03 관련 로깅 제거도 코드 상 확인됩니다. 수정 미달 및 회귀는 발견되지 않았습니다.\n[타입·빈 값] 패치는 SEC-SQL-01(파라미터 바인딩)과 SEC-LOG-03(민감정보 로그 차단)을 충족하며, 따옴표가 포함된 정상 이름(O'Neil) 조회가 수정본에서 정상 동작하는 것을 확인했다. 다만 타입·빈 값 관점에서 결함 영역 밖의 입력에 대한 회귀 2건을 발견했다: name=None일 때 원본은 'None' 문자열로 조회되나 수정본은 NULL 바인딩으로 빈 결과를 반환하며, name이 list일 때 원본은 문자열로 조회되지만 수정본은 바인딩 오류 예외가 발생한다. 수정 미달은 발견되지 않았다.\n[호출부 경로] 호출부 경로 관점에서 상위 호출자를 찾지 못해 직접 함수로 테스트했으나, SEC-SQL-01 기준 인젝션 입력은 수정본에서 차단되고 정상 입력의 결과는 원본과 동일했습니다. property_attack에서도 정상 입력군에서 불일치가 없어 수정 미달과 회귀 모두 발견되지 않았습니다.",
+        "summary": "[경계값] 경계값 중심으로 SQL 인젝션 방어와 정상 입력 불변성을 확인했다. 인젝션 시도(\"' OR 1=1 --\")에서 수정본은 빈 결과를 반환해 기대와 일치했고, 단일 인용부호가 포함된 정상 이름(\"O'Connor\")에서도 수정본은 정확히 매칭된 행만 반환했다. 빈 문자열 입력과 정상 입력군 전반(property_attack)에서도 원본과 수정본의 결과 차이가 없거나(정상 입력) 차이가 의도된 수정(인젝션 차단)으로 확인되어, 수정 미달과 회귀 모두 발견되지 않았다.\n[타입·빈 값] SQL 인젝션 방지는 정상적으로 차단되었으나, name=None 입력에서 원본은 'None' 문자열로 조회되던 동작이 수정본에서는 NULL 비교로 변경되어 결과가 바뀌는 회귀가 확인되었습니다. 그 외 정상 문자열·빈 문자열에서는 변화가 없습니다.\n[호출부 경로] 호출부 경로가 없어 직접 호출로 대체해 검증한 결과, 파라미터 바인딩 전환과 로그 민감정보 제거가 적용되었고(SEC-SQL-01, SEC-LOG-03), 정상 입력에서 결과/순서는 유지되었으며 회귀도 발견되지 않았다.",
         "attempts": [
-          "[경계값] 과거 공격 기록 검색: customer_dao.find_by_name 관련 이력 없음",
-          "[경계값] 수정본 함수 소스와 호출자 확인",
-          "[경계값] 경계값(인젝션 시도) 입력 \"' OR 1=1 --\"로 실행: 원본은 모든 행 반환, 수정본은 정확히 일치하는 1행만 반환 확인 (SEC-SQL-01 기대 동작 검증)",
-          "[경계값] 경계값(따옴표 포함 정상 이름) 입력 \"O'Neil\"로 실행: 원본은 SQL 오류, 수정본은 정상 1행 반환 확인 (SEC-SQL-01 기대 동작 검증)",
-          "[경계값] 정상 입력 유지 여부 확인: 동명이인 'Alice' 2건(id 순)으로 실행해 원본/수정본 동일 결과·정렬 확인",
-          "[경계값] 빈 문자열 이름(길이 0)으로 실행: 원본/수정본 동일 결과 확인",
-          "[경계값] 아주 긴 이름(매치 없음)으로 실행: 원본/수정본 동일 결과([]) 확인",
-          "[경계값] 회귀 탐지(property_attack): 결함 영역 밖(따옴표 등 특수문자 제외 정상 이름들만)에서 원본/수정본 비교, 불일치 없음 확인",
-          "[타입·빈 값] 공격 기록 탐색: 동일 함수(customer_dao.find_by_name) 과거 성공 사례 없음",
-          "[타입·빈 값] 수정 함수 소스와 호출자 확인: 파라미터 바인딩으로 변경, SQL 전체 로그 제거 확인",
-          "[타입·빈 값] 경계값: name=None으로 실행해 원본/수정본 비교 (DB에 name='None' 데이터 포함)",
-          "[타입·빈 값] 따옴표 포함 정상 문자열 name=\"O'Neil\"로 실행해 수정본이 올바르게 조회되는지 확인",
-          "[타입·빈 값] 빈 문자열 name=\"\"로 실행해 원본/수정본 동일 결과 확인",
-          "[타입·빈 값] 공백만 있는 문자열 name=\"   \"로 실행해 동일 결과 확인",
-          "[타입·빈 값] 비정상 타입 name=[]로 실행해 원본/수정본 차이 확인",
-          "[타입·빈 값] 정수 name=123으로 실행해 원본/수정본 동일 결과 확인",
-          "[타입·빈 값] 회귀 넓은 탐색(property_attack): 정상 문자열·숫자 문자열·공백 등 범위에서 비교, 차이 없음 확인",
-          "[호출부 경로] get_callers로 customer_dao.find_by_name 상위 호출자를 찾았으나 발견되지 않아(빈 목록) 직접 함수 수준으로 대체 공격 진행(호출부 경로 관점 한계 기록).",
-          "[호출부 경로] read_method로 수정본 소스를 확인하여 ? 바인딩과 파라미터 튜플 (name,) 사용을 검증.",
-          "[호출부 경로] 미달 검증(SEC-SQL-01): 인젝션 페이로드 \"' OR 1=1 --\"를 투입하여 run_diff 실행. 원본=전체 행 반환, 수정본=[], 규칙상 기대값=[]와 일치하여 인젝션 차단 확인(미달 아님).",
-          "[호출부 경로] 정상 입력 불변 확인(SEC-SQL-01): 이름 \"김민수\"로 run_diff 실행. 원본/수정본 모두 id 1,3 두 행 반환으로 동일(회귀 아님).",
-          "[호출부 경로] 경계 입력: 빈 문자열 이름으로 run_diff 실행. 원본/수정본 동일 행 반환(회귀 아님).",
-          "[호출부 경로] 특수문자 '?': 이름 \"A?B\"로 run_diff 실행. 원본/수정본 동일 행 반환(회귀 아님).",
-          "[호출부 경로] 회귀 광역 탐색(property_attack): 정상 입력군 샘플[\"김민수\",\"이영희\",\"abc\",\"\", \"A B\"]로 실행. 불일치 0건으로 결함 영역 밖 회귀 없음 확인."
+          "[경계값] 과거 유사 공격 기록 확인: 해당 함수에 대한 저장된 성공 공격 없음(컨텍스트 제공 기준)",
+          "[경계값] 미달-경계: 인젝션 문자열(\"' OR 1=1 --\") 입력. 원본은 전체 행 반환, 수정본은 빈 목록 반환이어야 함(SEC-SQL-01)",
+          "[경계값] 미달-경계: 정상 이름에 단일 인용부호 포함(\"O'Connor\") 입력. 수정본은 정확히 해당 고객만 반환해야 함(SEC-SQL-01)",
+          "[경계값] 미달-경계: 빈 문자열(길이 0) 입력. 원본과 수정본 모두 동일한 결과여야 함(정상 입력 불변성)",
+          "[경계값] 회귀: 정상 입력만(Alice, Bob, Zed, \"\", Q)으로 property_attack 실행하여 원본과 수정본 비교",
+          "[타입·빈 값] 공격 메모리 없음 확인 후 경계값·특수문자 중심 입력 설계",
+          "[타입·빈 값] SQL 인젝션 페이로드 이름(\"a' OR '1'='1\")로 원본과 수정본 결과 비교: 원본은 전체 행, 수정본은 정확히 일치하는 1건만 반환(수정 의도대로 동작)",
+          "[타입·빈 값] None 입력으로 원본과 수정본 비교: 원본은 'None' 문자열로 조회 1건, 수정본은 NULL 비교로 0건(회귀 발견)",
+          "[타입·빈 값] 따옴표 포함 정상 이름(\"O'Neil\")으로 원본은 구문 오류, 수정본은 정상 1건 반환(수정 의도대로 동작)",
+          "[타입·빈 값] 정상 문자열·빈 문자열(\"김민수\", \"Alice\", \"Bob\", \"\", \"  \")에서 원본과 수정본 결과 동일 확인",
+          "[타입·빈 값] property_attack로 정상 문자열 범위에서 광범위 회귀 여부 확인: 불일치 0건",
+          "[호출부 경로] attack_memory 확인: 과거 성공 사례 없음",
+          "[호출부 경로] 호출부 탐색: context.callers 비어 있어 호출 경로로 실행 불가 → 직접 호출로 대체",
+          "[호출부 경로] 정상 입력(동명이인, id 정렬) 확인: 이름='김민수' → 원본/수정 동일",
+          "[호출부 경로] 인젝션 문자열 입력: 이름=\"김민수' OR 1=1 --\" → 원본 전체 행 반환, 수정본 빈 목록(의도된 보안 수정)",
+          "[호출부 경로] 따옴표 포함 정상 이름: 이름=\"O'Neil\" → 원본 OperationalError, 수정본 정상 반환(의도된 보안 수정)",
+          "[호출부 경로] 경계값: 빈 문자열 이름='' → 원본/수정 동일",
+          "[호출부 경로] 비정상 타입: 이름=None → 원본 'None' 문자열 매칭, 수정본 빈 목록(명세 밖 입력으로 회귀로 미보고)",
+          "[호출부 경로] 비정상 타입: 이름=1(정수) → 원본/수정 동일",
+          "[호출부 경로] property_attack: 안전 이름 집합(김민수, Alice, Bob, '', NonExist)으로 광범위 회귀 탐색 → 불일치 0건"
         ],
         "findings": [
           {
             "kind": "regression",
             "method": "customer_dao.find_by_name",
-            "input_json": "[{\"$db\": {\"customers\": [{\"name\": \"None\", \"email\": \"none@example.com\", \"phone\": \"010-0000-0000\", \"grade\": \"BASIC\"}, {\"name\": \"\", \"email\": \"empty@example.com\", \"phone\": \"010-1111-2222\", \"grade\": \"BASIC\"}, {\"name\": \"O'Neil\", \"email\": \"oneil@example.com\", \"phone\": \"010-2222-3333\", \"grade\": \"VIP\"}, {\"name\": \"Alice\", \"email\": \"alice@example.com\", \"phone\": \"010-3333-4444\", \"grade\": \"BASIC\"}]}}, null]",
-            "expected_json": "[{\"id\": 1, \"name\": \"None\", \"email\": \"none@example.com\", \"phone\": \"010-0000-0000\", \"grade\": \"BASIC\", \"created_at\": null}]",
+            "input_json": "[{\"$db\": {\"customers\": [{\"id\": 1, \"name\": \"김민수\"}, {\"id\": 2, \"name\": \"O'Neil\"}, {\"id\": 3, \"name\": \"Alice\"}, {\"id\": 4, \"name\": \"Bob\"}, {\"id\": 5, \"name\": \"a' OR '1'='1\"}, {\"id\": 6, \"name\": \"\"}, {\"id\": 7, \"name\": \"  \"}, {\"id\": 8, \"name\": \"None\"}]}}, null]",
+            "expected_json": "[{\"id\": 8, \"name\": \"None\", \"email\": null, \"phone\": null, \"grade\": \"BASIC\", \"created_at\": null}]",
             "rule_id": "",
-            "explanation": "name=None 입력 시 원본은 f-string이 'None' 문자열로 변환해 조회하여 'None' 이름 고객 1건을 반환하지만, 수정본은 NULL 바인딩으로 WHERE name = NULL이 되어 일치 행이 없어 []를 반환한다. 결함(SQL 인젝션)과 무관한 타입 처리 차이로 원본과 달라 회귀이다.",
+            "explanation": "name=None 입력에서 원본은 f-string으로 'None'이 문자열로 들어가 name='None'을 조회해 1건을 반환했으나, 수정본은 파라미터 바인딩으로 NULL이 바인딩되어 name=NULL 비교가 되어 어떤 행도 반환하지 않습니다. 결함(SEC-SQL-01: 인젝션 방지)과 무관한 입력에서 동작이 바뀐 회귀입니다.",
             "original": {
               "ok": true,
               "value": [
                 {
-                  "id": 1,
+                  "id": 8,
                   "name": "None",
-                  "email": "none@example.com",
-                  "phone": "010-0000-0000",
+                  "email": null,
+                  "phone": null,
                   "grade": "BASIC",
                   "created_at": null
                 }
@@ -314,34 +328,6 @@
             "patched": {
               "ok": true,
               "value": []
-            },
-            "verified": true,
-            "check": "수정본이 원본과 다름",
-            "angle": "types"
-          },
-          {
-            "kind": "regression",
-            "method": "customer_dao.find_by_name",
-            "input_json": "[{\"$db\": {\"customers\": [{\"name\": \"[]\", \"email\": \"list@example.com\", \"phone\": \"010-9999-0000\", \"grade\": \"BASIC\"}, {\"name\": \"Alice\", \"email\": \"alice@example.com\", \"phone\": \"010-3333-4444\", \"grade\": \"BASIC\"}]}}, []]",
-            "expected_json": "[{\"id\": 1, \"name\": \"[]\", \"email\": \"list@example.com\", \"phone\": \"010-9999-0000\", \"grade\": \"BASIC\", \"created_at\": null}]",
-            "rule_id": "",
-            "explanation": "name=[] 입력 시 원본은 리스트가 문자열 \"[]\"로 포맷되어 조회가 정상 수행되어 1건을 반환한다. 수정본은 SQLite 파라미터 바인딩에서 list 타입 미지원으로 ProgrammingError 예외가 발생한다. 결함 영역 밖(인젝션 아님)에서 원본과 다르게 예외가 발생하므로 회귀다.",
-            "original": {
-              "ok": true,
-              "value": [
-                {
-                  "id": 1,
-                  "name": "[]",
-                  "email": "list@example.com",
-                  "phone": "010-9999-0000",
-                  "grade": "BASIC",
-                  "created_at": null
-                }
-              ]
-            },
-            "patched": {
-              "ok": false,
-              "exception": "ProgrammingError: Error binding parameter 1: type 'list' is not supported"
             },
             "verified": true,
             "check": "수정본이 원본과 다름",
@@ -355,16 +341,13 @@
           {
             "angle": "boundary",
             "label": "경계값",
-            "summary": "SEC-SQL-01에 따른 파라미터 바인딩이 적용되어 인젝션 입력에 대한 동작이 올바르게 개선되었고, 정상 입력에서는 원본과 동일한 결과가 유지되었습니다. SEC-LOG-03 관련 로깅 제거도 코드 상 확인됩니다. 수정 미달 및 회귀는 발견되지 않았습니다.",
+            "summary": "경계값 중심으로 SQL 인젝션 방어와 정상 입력 불변성을 확인했다. 인젝션 시도(\"' OR 1=1 --\")에서 수정본은 빈 결과를 반환해 기대와 일치했고, 단일 인용부호가 포함된 정상 이름(\"O'Connor\")에서도 수정본은 정확히 매칭된 행만 반환했다. 빈 문자열 입력과 정상 입력군 전반(property_attack)에서도 원본과 수정본의 결과 차이가 없거나(정상 입력) 차이가 의도된 수정(인젝션 차단)으로 확인되어, 수정 미달과 회귀 모두 발견되지 않았다.",
             "attempts": [
-              "과거 공격 기록 검색: customer_dao.find_by_name 관련 이력 없음",
-              "수정본 함수 소스와 호출자 확인",
-              "경계값(인젝션 시도) 입력 \"' OR 1=1 --\"로 실행: 원본은 모든 행 반환, 수정본은 정확히 일치하는 1행만 반환 확인 (SEC-SQL-01 기대 동작 검증)",
-              "경계값(따옴표 포함 정상 이름) 입력 \"O'Neil\"로 실행: 원본은 SQL 오류, 수정본은 정상 1행 반환 확인 (SEC-SQL-01 기대 동작 검증)",
-              "정상 입력 유지 여부 확인: 동명이인 'Alice' 2건(id 순)으로 실행해 원본/수정본 동일 결과·정렬 확인",
-              "빈 문자열 이름(길이 0)으로 실행: 원본/수정본 동일 결과 확인",
-              "아주 긴 이름(매치 없음)으로 실행: 원본/수정본 동일 결과([]) 확인",
-              "회귀 탐지(property_attack): 결함 영역 밖(따옴표 등 특수문자 제외 정상 이름들만)에서 원본/수정본 비교, 불일치 없음 확인"
+              "과거 유사 공격 기록 확인: 해당 함수에 대한 저장된 성공 공격 없음(컨텍스트 제공 기준)",
+              "미달-경계: 인젝션 문자열(\"' OR 1=1 --\") 입력. 원본은 전체 행 반환, 수정본은 빈 목록 반환이어야 함(SEC-SQL-01)",
+              "미달-경계: 정상 이름에 단일 인용부호 포함(\"O'Connor\") 입력. 수정본은 정확히 해당 고객만 반환해야 함(SEC-SQL-01)",
+              "미달-경계: 빈 문자열(길이 0) 입력. 원본과 수정본 모두 동일한 결과여야 함(정상 입력 불변성)",
+              "회귀: 정상 입력만(Alice, Bob, Zed, \"\", Q)으로 property_attack 실행하여 원본과 수정본 비교"
             ],
             "findings": 0,
             "verified": 0,
@@ -373,34 +356,33 @@
           {
             "angle": "types",
             "label": "타입·빈 값",
-            "summary": "패치는 SEC-SQL-01(파라미터 바인딩)과 SEC-LOG-03(민감정보 로그 차단)을 충족하며, 따옴표가 포함된 정상 이름(O'Neil) 조회가 수정본에서 정상 동작하는 것을 확인했다. 다만 타입·빈 값 관점에서 결함 영역 밖의 입력에 대한 회귀 2건을 발견했다: name=None일 때 원본은 'None' 문자열로 조회되나 수정본은 NULL 바인딩으로 빈 결과를 반환하며, name이 list일 때 원본은 문자열로 조회되지만 수정본은 바인딩 오류 예외가 발생한다. 수정 미달은 발견되지 않았다.",
+            "summary": "SQL 인젝션 방지는 정상적으로 차단되었으나, name=None 입력에서 원본은 'None' 문자열로 조회되던 동작이 수정본에서는 NULL 비교로 변경되어 결과가 바뀌는 회귀가 확인되었습니다. 그 외 정상 문자열·빈 문자열에서는 변화가 없습니다.",
             "attempts": [
-              "공격 기록 탐색: 동일 함수(customer_dao.find_by_name) 과거 성공 사례 없음",
-              "수정 함수 소스와 호출자 확인: 파라미터 바인딩으로 변경, SQL 전체 로그 제거 확인",
-              "경계값: name=None으로 실행해 원본/수정본 비교 (DB에 name='None' 데이터 포함)",
-              "따옴표 포함 정상 문자열 name=\"O'Neil\"로 실행해 수정본이 올바르게 조회되는지 확인",
-              "빈 문자열 name=\"\"로 실행해 원본/수정본 동일 결과 확인",
-              "공백만 있는 문자열 name=\"   \"로 실행해 동일 결과 확인",
-              "비정상 타입 name=[]로 실행해 원본/수정본 차이 확인",
-              "정수 name=123으로 실행해 원본/수정본 동일 결과 확인",
-              "회귀 넓은 탐색(property_attack): 정상 문자열·숫자 문자열·공백 등 범위에서 비교, 차이 없음 확인"
+              "공격 메모리 없음 확인 후 경계값·특수문자 중심 입력 설계",
+              "SQL 인젝션 페이로드 이름(\"a' OR '1'='1\")로 원본과 수정본 결과 비교: 원본은 전체 행, 수정본은 정확히 일치하는 1건만 반환(수정 의도대로 동작)",
+              "None 입력으로 원본과 수정본 비교: 원본은 'None' 문자열로 조회 1건, 수정본은 NULL 비교로 0건(회귀 발견)",
+              "따옴표 포함 정상 이름(\"O'Neil\")으로 원본은 구문 오류, 수정본은 정상 1건 반환(수정 의도대로 동작)",
+              "정상 문자열·빈 문자열(\"김민수\", \"Alice\", \"Bob\", \"\", \"  \")에서 원본과 수정본 결과 동일 확인",
+              "property_attack로 정상 문자열 범위에서 광범위 회귀 여부 확인: 불일치 0건"
             ],
-            "findings": 2,
-            "verified": 2,
+            "findings": 1,
+            "verified": 1,
             "error": null
           },
           {
             "angle": "callers",
             "label": "호출부 경로",
-            "summary": "호출부 경로 관점에서 상위 호출자를 찾지 못해 직접 함수로 테스트했으나, SEC-SQL-01 기준 인젝션 입력은 수정본에서 차단되고 정상 입력의 결과는 원본과 동일했습니다. property_attack에서도 정상 입력군에서 불일치가 없어 수정 미달과 회귀 모두 발견되지 않았습니다.",
+            "summary": "호출부 경로가 없어 직접 호출로 대체해 검증한 결과, 파라미터 바인딩 전환과 로그 민감정보 제거가 적용되었고(SEC-SQL-01, SEC-LOG-03), 정상 입력에서 결과/순서는 유지되었으며 회귀도 발견되지 않았다.",
             "attempts": [
-              "get_callers로 customer_dao.find_by_name 상위 호출자를 찾았으나 발견되지 않아(빈 목록) 직접 함수 수준으로 대체 공격 진행(호출부 경로 관점 한계 기록).",
-              "read_method로 수정본 소스를 확인하여 ? 바인딩과 파라미터 튜플 (name,) 사용을 검증.",
-              "미달 검증(SEC-SQL-01): 인젝션 페이로드 \"' OR 1=1 --\"를 투입하여 run_diff 실행. 원본=전체 행 반환, 수정본=[], 규칙상 기대값=[]와 일치하여 인젝션 차단 확인(미달 아님).",
-              "정상 입력 불변 확인(SEC-SQL-01): 이름 \"김민수\"로 run_diff 실행. 원본/수정본 모두 id 1,3 두 행 반환으로 동일(회귀 아님).",
-              "경계 입력: 빈 문자열 이름으로 run_diff 실행. 원본/수정본 동일 행 반환(회귀 아님).",
-              "특수문자 '?': 이름 \"A?B\"로 run_diff 실행. 원본/수정본 동일 행 반환(회귀 아님).",
-              "회귀 광역 탐색(property_attack): 정상 입력군 샘플[\"김민수\",\"이영희\",\"abc\",\"\", \"A B\"]로 실행. 불일치 0건으로 결함 영역 밖 회귀 없음 확인."
+              "attack_memory 확인: 과거 성공 사례 없음",
+              "호출부 탐색: context.callers 비어 있어 호출 경로로 실행 불가 → 직접 호출로 대체",
+              "정상 입력(동명이인, id 정렬) 확인: 이름='김민수' → 원본/수정 동일",
+              "인젝션 문자열 입력: 이름=\"김민수' OR 1=1 --\" → 원본 전체 행 반환, 수정본 빈 목록(의도된 보안 수정)",
+              "따옴표 포함 정상 이름: 이름=\"O'Neil\" → 원본 OperationalError, 수정본 정상 반환(의도된 보안 수정)",
+              "경계값: 빈 문자열 이름='' → 원본/수정 동일",
+              "비정상 타입: 이름=None → 원본 'None' 문자열 매칭, 수정본 빈 목록(명세 밖 입력으로 회귀로 미보고)",
+              "비정상 타입: 이름=1(정수) → 원본/수정 동일",
+              "property_attack: 안전 이름 집합(김민수, Alice, Bob, '', NonExist)으로 광범위 회귀 탐색 → 불일치 0건"
             ],
             "findings": 0,
             "verified": 0,
@@ -412,6 +394,12 @@
       "judge": {
         "passed": true,
         "checks": [
+          {
+            "name": "intake_accepted",
+            "passed": true,
+            "detail": "증상: 시큐어코딩 진단 결과, customer_dao.find_by_name에서 f-string으로 SQL을 조립하고 있습니다. 조치 바랍니다.",
+            "data": {}
+          },
           {
             "name": "security_zero",
             "passed": true,
@@ -443,9 +431,9 @@
           {
             "name": "attack_findings_rechecked",
             "passed": true,
-            "detail": "공격 입력 2개 중 정답과 다름 0개 (미달 0, 회귀 0)",
+            "detail": "공격 입력 1개 중 정답과 다름 0개 (미달 0, 회귀 0)",
             "data": {
-              "inputs": 2,
+              "inputs": 1,
               "mismatches": 0,
               "under_fix": 0,
               "regression": 0,
@@ -476,9 +464,10 @@
   ],
   "human_review_reason": null,
   "decision": null,
-  "tokens_used": 269544,
+  "answer_check": null,
+  "tokens_used": 230220,
   "run_ids": [
-    "SR-2103-20261021-225852"
+    "SR-2103-20261022-151533"
   ],
-  "updated_at": "2026-10-21T23:02:57"
+  "updated_at": "2026-10-22T15:18:37"
 }

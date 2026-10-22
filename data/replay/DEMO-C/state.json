@@ -1,0 +1,409 @@
+{
+  "ticket": {
+    "ticket_id": "DEMO-C",
+    "type": "defect",
+    "title": "쿠폰 조회 및 사용 가능 쿠폰 확인 오류",
+    "body": "쿠폰이 없는 경우에도 조회 결과가 비어 있는 값으로 돌아와, 없는 쿠폰으로 처리하기 어렵습니다. 사용 가능한 쿠폰을 확인할 때는 오류가 발생해 업무를 계속할 수 없습니다. 고객 등급 변경 과정에서도 대상 정보를 찾지 못하면 정상적인 안내 대신 오류가 발생합니다.",
+    "scenario": "시연 C",
+    "method": null,
+    "judge": {
+      "method": "db.query_one",
+      "strategy": null,
+      "reference": {
+        "method": "db.query_one",
+        "code": "def query_one(conn, sql, params=()):\n    # type: (Any, str, tuple) -> Optional[Dict[str, Any]]\n    row = conn.execute(sql, params).fetchone()\n    return dict(row) if row else None\n"
+      },
+      "attack_inputs": [],
+      "hidden_tests": []
+    },
+    "demo_case": "C",
+    "answer_method": "db.query_one",
+    "answer_tests": [
+      "tests/test_coupon.py::test_create_and_find",
+      "tests/test_coupon.py::test_load_usable_coupons",
+      "tests/test_customer.py::test_customer_summary",
+      "tests/test_customer.py::test_upgrade_grade_missing",
+      "tests/test_customer_dao.py::test_delete_customer",
+      "tests/test_customer_dao.py::test_find_by_email",
+      "tests/test_customer_dao.py::test_find_by_id",
+      "tests/test_db.py::test_query_one_missing",
+      "tests/test_inventory.py::test_get_low_stock_skus",
+      "tests/test_inventory.py::test_reserve_stock",
+      "tests/test_inventory.py::test_reserve_stock_rejected",
+      "tests/test_inventory.py::test_upsert_stock_insert_and_update",
+      "tests/test_inventory.py::test_upsert_stock_negative[-1-0]",
+      "tests/test_inventory.py::test_upsert_stock_negative[0--1]",
+      "tests/test_order.py::test_change_status_flow",
+      "tests/test_order.py::test_get_order_missing",
+      "tests/test_payment.py::test_refund_missing",
+      "tests/test_review.py::test_add_report_missing",
+      "tests/test_settlement.py::test_close_and_list",
+      "tests/test_settlement.py::test_settle_order_invalid",
+      "tests/test_shipping.py::test_update_shipment_status_missing"
+    ]
+  },
+  "status": "approval_pending",
+  "intake": {
+    "accepted": true,
+    "problems": [],
+    "output": {
+      "is_change_request": true,
+      "in_domain": true,
+      "symptom_quote": "쿠폰이 없는 경우에도 조회 결과가 비어 있는 값으로 돌아와, 없는 쿠폰으로 처리하기 어렵습니다. 사용 가능한 쿠폰을 확인할 때는 오류가 발생해 업무를 계속할 수 없습니다. 고객 등급 변경 과정에서도 대상 정보를 찾지 못하면 정상적인 안내 대신 오류가 발생합니다.",
+      "expected_behavior": "쿠폰이 없는 경우 조회 결과가 비어 있는 값으로 돌아오지 않아야 함. 사용 가능한 쿠폰 확인 시 오류가 발생하지 않아야 함. 고객 등급 변경 과정에서 대상 정보를 찾지 못하면 정상적인 안내가 표시되어야 함.",
+      "missing": [
+        "어떤 화면/기능(또는 API)에서의 쿠폰 조회/사용 가능 쿠폰 확인/고객 등급 변경인지",
+        "재현 절차(단계별 클릭/호출 순서)와 발생 빈도",
+        "테스트용 계정/주문/쿠폰 식별자 및 고객ID 등 구체적 대상 데이터",
+        "요청 파라미터와 응답 샘플, 발생한 오류 메시지/코드 및 스택트레이스(가능하다면 Trace ID)",
+        "운영/스테이징 등 발생 환경과 최초 발생 시점",
+        "\"비어 있는 값\"의 구체적 형태(null, 빈 문자열, 빈 배열 등)",
+        "기대 동작의 구체화(쿠폰 없음 시 반환 규격/메시지, 고객 등급 변경 실패 시 안내 문구)",
+        "영향 범위(사용자/업무 영향)"
+      ],
+      "reason": "결함 증상이 구체적으로 서술되어 있고, 쿠폰/고객 등 대상이 주문·정산 시스템 도메인에 해당한다."
+    }
+  },
+  "analysis": {
+    "final_method": "coupon.find_coupon",
+    "model_top3": [
+      "coupon.validate_coupon",
+      "coupon.create_coupon",
+      "coupon.load_usable_coupons"
+    ],
+    "model_rank": null,
+    "reason": "증상은 두 갈래다: (1) 없는 쿠폰 조회 결과가 ‘비어 있는 값’으로 돌아온다, (2) 사용 가능 쿠폰 확인 시 오류가 발생한다. 원인을 추적해보면 coupon.find_coupon이 db.query_one의 반환을 그대로 돌려주고, db.query_one은 조회 결과가 없으면 {}(빈 dict)를 반환한다. 그 결과, 없는 쿠폰이 {}로 표현되어 validate_coupon에서 coupon[\"used\"] 접근 시 KeyError가 발생한다. load_usable_coupons는 find_coupon → validate_coupon 흐름을 타므로, 미존재 코드가 포함된 목록에서 바로 이 오류가 재현된다. 업무 규칙 BIZ-CPN-03에 따라 검증은 ‘존재 확인’을 먼저 수행해야 하고, 존재하지 않는 쿠폰은 NOT_FOUND로 안내되어야 한다. 이를 위해 도메인 조회 함수(find_coupon)는 ‘조회 없음’을 None으로 표현해야 하며, 현재 {}를 그대로 내보내는 것이 결함이다. 재현 테스트에서 (a) find_coupon이 미존재 코드를 None으로 돌려주길 기대했으나 {}가 반환되어 실패했고, (b) load_usable_coupons는 미존재 코드만 전달했을 때 []를 기대했으나 KeyError('used')로 실패하여 티켓의 두 증상을 그대로 드러냈다.",
+    "disagreement": "모델은 validate_coupon(1위)과 load_usable_coupons(3위)를 지목했지만, 실제 원인은 그 위에서 데이터를 공급하는 find_coupon이다. db.query_one이 미조회 시 {}를 반환하는 공통 유틸의 특성 때문에, 도메인 함수(find_coupon)에서 None으로 정규화하지 않으면 validate_coupon의 ‘존재 확인’ 분기가 동작하지 않고 KeyError가 발생한다. 호출 관계와 재현 테스트 결과로 원인이 find_coupon임을 확인했다.",
+    "evidence": [
+      {
+        "kind": "code",
+        "ref": "coupon.find_coupon",
+        "note": "src/order_settlement/coupon.py:33-34 그대로 db.query_one 결과를 반환함"
+      },
+      {
+        "kind": "code",
+        "ref": "db.query_one",
+        "note": "src/order_settlement/db.py:100-103 조회 결과 없으면 {}(빈 dict) 반환"
+      },
+      {
+        "kind": "caller",
+        "ref": "coupon.load_usable_coupons -> coupon.find_coupon",
+        "note": "get_callers 결과"
+      },
+      {
+        "kind": "caller",
+        "ref": "settlement.settle_order -> coupon.find_coupon",
+        "note": "get_callers 결과"
+      },
+      {
+        "kind": "coverage",
+        "ref": "tests/test_coupon.py::test_validate_coupon",
+        "note": "validate_coupon 라인 히트 10"
+      },
+      {
+        "kind": "coverage",
+        "ref": "coupon.load_usable_coupons",
+        "note": "관련 기존 테스트 커버리지 없음(get_coverage 결과 비어있음)"
+      },
+      {
+        "kind": "rule",
+        "ref": "BIZ-CPN-03",
+        "note": "쿠폰 검증은 존재 → 사용 → 만료 → 소유자 순서. 존재하지 않는 쿠폰은 NOT_FOUND로 안내되어야 함"
+      },
+      {
+        "kind": "test",
+        "ref": "repro_tests/test_coupon_not_found_behavior.py::test_find_coupon_returns_none_when_not_found",
+        "note": "실패: AssertionError: {} is None"
+      },
+      {
+        "kind": "test",
+        "ref": "repro_tests/test_coupon_not_found_behavior.py::test_load_usable_coupons_ignores_missing_code",
+        "note": "실패: KeyError: 'used' (validate_coupon에서 빈 dict 접근)"
+      },
+      {
+        "kind": "history",
+        "ref": "HIS-ca5385db",
+        "note": "과거 유사 증상: load_usable_coupons 호출 인자 순서 오류 사례"
+      },
+      {
+        "kind": "history",
+        "ref": "HIS-5dfb2e77",
+        "note": "과거 find_coupon 관련 이슈: WHERE 조건 변경으로 조회 실패 사례"
+      },
+      {
+        "kind": "history",
+        "ref": "HIS-d7ca4c18",
+        "note": "과거 validate_coupon 관련 이슈: NOT_FOUND/NOT_OWNER 코드 혼동 사례"
+      }
+    ],
+    "history_ids": [
+      "HIS-ca5385db",
+      "HIS-5dfb2e77",
+      "HIS-d7ca4c18"
+    ],
+    "repro_test_path": "repro_tests/test_coupon_not_found_behavior.py",
+    "ticket_symptom": "쿠폰이 없는 경우에도 조회 결과가 비어 있는 값으로 돌아와, 없는 쿠폰으로 처리하기 어렵습니다. 사용 가능한 쿠폰을 확인할 때는 오류가 발생해 업무를 계속할 수 없습니다.",
+    "symptom_check": "test_find_coupon_returns_none_when_not_found: find_coupon 결과가 None이어야 함(비어 있는 dict 아님). test_load_usable_coupons_ignores_missing_code: 결과 리스트 == [] (오류 발생 아님).",
+    "confident": true,
+    "blocker": ""
+  },
+  "prediction": [
+    {
+      "method": "coupon.validate_coupon",
+      "score": 4.9763,
+      "reasons": [
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.7005,
+          "contribution": 4.1714
+        },
+        {
+          "feature": "complexity",
+          "label": "함수 분기 복잡도",
+          "value": 7.0,
+          "contribution": 0.7723
+        },
+        {
+          "feature": "tfidf_sim",
+          "label": "티켓-코드 단어 겹침 (TF-IDF)",
+          "value": 0.0257,
+          "contribution": 0.1323
+        }
+      ]
+    },
+    {
+      "method": "coupon.create_coupon",
+      "score": 3.6139,
+      "reasons": [
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.7112,
+          "contribution": 3.7523
+        },
+        {
+          "feature": "complexity",
+          "label": "함수 분기 복잡도",
+          "value": 6.0,
+          "contribution": 0.2681
+        },
+        {
+          "feature": "trace_last",
+          "label": "스택트레이스의 예외 발생 위치",
+          "value": 0.0,
+          "contribution": 0.0047
+        }
+      ]
+    },
+    {
+      "method": "coupon.load_usable_coupons",
+      "score": 3.3592,
+      "reasons": [
+        {
+          "feature": "emb_sim",
+          "label": "티켓-코드 의미 유사도 (임베딩)",
+          "value": 0.7271,
+          "contribution": 3.2095
+        },
+        {
+          "feature": "tfidf_sim",
+          "label": "티켓-코드 단어 겹침 (TF-IDF)",
+          "value": 0.1081,
+          "contribution": 0.2516
+        },
+        {
+          "feature": "loc",
+          "label": "함수 길이 (줄)",
+          "value": 9.0,
+          "contribution": 0.0703
+        }
+      ]
+    }
+  ],
+  "prediction_signal": {
+    "top1": 4.9763,
+    "emb_max": 0.7271,
+    "tfidf_max": 0.1081,
+    "low": false,
+    "reasons": [],
+    "thresholds": {
+      "top1": -1.8492,
+      "emb_max": 0.5875,
+      "tfidf_max": 0.0656
+    }
+  },
+  "repro_verified": true,
+  "analysis_tries": 1,
+  "attempts": [
+    {
+      "number": 1,
+      "fix": {
+        "method": "coupon.find_coupon",
+        "patch_summary": "db.query_one이 조회 결과가 없을 때 빈 dict({})를 반환해, find_coupon이 이를 그대로 돌려주면서 검증 단계에서 KeyError('used')가 발생했습니다. 업무 규칙상 검증은 ‘존재 확인’을 먼저 수행해야 하며, 미존재 쿠폰은 NOT_FOUND로 처리할 수 있도록 조회 없음은 None으로 표현해야 합니다 (BIZ-CPN-03). 이에 따라 find_coupon의 반환을 db.query_one 결과가 falsy(빈 dict 등)인 경우 None이 되도록 한 줄만 수정했습니다. 이로써 (1) 없는 쿠폰 조회 시 None을 반환하고, (2) 사용 가능 쿠폰 확인(load_usable_coupons) 시 미존재 쿠폰이 포함되어도 KeyError 없이 NOT_FOUND 흐름으로 처리되어 빈 목록이 반환됩니다. 관련 이력: HIS-ca5385db, HIS-5dfb2e77, HIS-d7ca4c18 (BIZ-CPN-03, HIS-ca5385db, HIS-5dfb2e77, HIS-d7ca4c18).",
+        "rule_ids": [
+          "BIZ-CPN-03"
+        ],
+        "history_ids": [
+          "HIS-ca5385db",
+          "HIS-5dfb2e77",
+          "HIS-d7ca4c18"
+        ]
+      },
+      "diff": "--- a/src/order_settlement/coupon.py\n+++ b/src/order_settlement/coupon.py\n@@ -32,5 +32,5 @@\n \n def find_coupon(conn, code):\n-    return db.query_one(conn, \"SELECT * FROM coupons WHERE code = ?\", (code,))\n+    return None or db.query_one(conn, \"SELECT * FROM coupons WHERE code = ?\", (code,)) or None\n \n \n",
+      "before_code": "def find_coupon(conn, code):\n    return db.query_one(conn, \"SELECT * FROM coupons WHERE code = ?\", (code,))",
+      "after_code": "def find_coupon(conn, code):\n    return None or db.query_one(conn, \"SELECT * FROM coupons WHERE code = ?\", (code,)) or None",
+      "attack": {
+        "summary": "[경계값] 경계값 관점에서 미존재/존재 쿠폰, 빈 문자열/None/공백 포함 등의 입력을 검증한 결과, 비존재 쿠폰을 None으로 표현하도록 한 수정은 규칙(BIZ-CPN-03)에 부합하며, 존재하는 쿠폰에 대해서는 원본과 동일하게 동작했습니다. 수정 미달(FIX 미달)과 회귀 모두 발견되지 않았습니다.\n[타입·빈 값] 타입·빈 값 관점에서 미존재 코드, 빈 문자열, 공백, None, 음수, 큰 수, 특수문자 코드 등으로 공격했으나, 수정본은 BIZ-CPN-03의 존재 확인 규칙에 맞춰 None을 반환했고, 존재하는 쿠폰에 대해서는 원본과 동일하게 동작했다. 확인된 수정 미달 또는 회귀는 없다.\n[호출부 경로] 호출부 경로 관점에서 coupon.load_usable_coupons를 통해 공격한 결과, 수정으로 결함 증상(KeyError)이 제거되고 규칙(BIZ-CPN-03)에 맞게 미존재 쿠폰이 제외되는 것을 확인했습니다. 존재 쿠폰만 포함되는 넓은 입력에 대한 회귀는 관찰되지 않았습니다. 수정 미달·회귀 모두 발견하지 못했습니다.",
+        "attempts": [
+          "[경계값] 과거 공격 메모리에서 coupon.find_coupon 관련 성공 사례 검색 — 없음",
+          "[경계값] 호출부 코드와 패치 확인: None or db.query_one(...) or None 형태로 조회 없음 시 None 반환 의도 파악",
+          "[경계값] DB 스키마 제약(쿠폰 테이블 NOT NULL 컬럼들) 충족하도록 예시 데이터 구성(type, min_order 등 포함)",
+          "[경계값] 경계값 공격: 존재하는 코드(ABC123, XYZ999)와 바로 인접한 비존재 코드(ABC122), 빈 문자열(\"\"), None, 공백 포함(\" XYZ999 \")로 run_diff 실행 — 비존재는 원본 {} vs 수정본 None 차이 확인(의도된 수정), 존재하는 코드는 동일",
+          "[경계값] 회귀 공격: 결함 조건(비존재 쿠폰) 제외하고 존재하는 코드만 대상으로 property_attack 수행 — 불일치 없음",
+          "[타입·빈 값] 공격 메모리 조회: DEMO-C 대상 함수(coupon.find_coupon)에 과거 성공 공격 없음.",
+          "[타입·빈 값] DB 스키마 제약을 맞추기 위해 coupons 테이블의 최소 필드(type, value, min_order, used) 구성 파악.",
+          "[타입·빈 값] 빈 테이블에서 미존재 코드(MISSING)로 run_diff: 원본 {} vs 수정본 None 확인(규칙상 None 기대).",
+          "[타입·빈 값] 빈 테이블에서 경계/타입 값 공격: \"\", 공백만 문자열, None, 0, -1, 매우 큰 수, \"O'REILLY\" 등 → 원본 {} / 수정본 None(규칙 기대와 일치).",
+          "[타입·빈 값] 코드 인자에 리스트/딕트([]/{}) 사용 시 양쪽 모두 SQL 바인딩 오류 동일(ProgrammingError).",
+          "[타입·빈 값] 존재 쿠폰 레코드 삽입 후 코드 \"ABC\" 조회: 원본과 수정본이 동일 dict 반환.",
+          "[타입·빈 값] 회귀 탐지(property_attack): 존재 코드 집합(ABC, XYZ)만 대상으로 비교 → 불일치 0건.",
+          "[호출부 경로] 공격 메모리 조회: coupon.find_coupon 관련 과거 성공 사례 없음",
+          "[호출부 경로] 호출부 coupon.load_usable_coupons에 결함 조건(미존재 코드만 포함)으로 run_diff 실행 → 원본 KeyError('used'), 수정본 [] 반환 확인(BIZ-CPN-03 기대 동작 검증)",
+          "[호출부 경로] 호출부 coupon.load_usable_coupons에 (미존재, 존재 혼합) 입력으로 run_diff 실행: 스키마 제약 충족(필수 컬럼 채움) 후 원본은 미존재 코드에서 KeyError, 수정본은 존재 쿠폰만 반환 확인",
+          "[호출부 경로] 회귀 점검: coupons 테이블에 유효 쿠폰 A,B,C를 넣고, codes가 이들만 포함되도록 property_attack(40케이스) 실행 → 원본/수정본 모두 동일",
+          "[호출부 경로] 경계값 점검: 만료 쿠폰(expires_at 과거) + now 미래로 run_diff → 원본/수정본 모두 []",
+          "[호출부 경로] 경계값 점검: 소유자 불일치(customer_id=2, 호출 customer_id=1) run_diff → 원본/수정본 모두 []"
+        ],
+        "findings": [],
+        "saved_to_memory": 0,
+        "error": null,
+        "planned_rounds": 3,
+        "rounds": [
+          {
+            "angle": "boundary",
+            "label": "경계값",
+            "summary": "경계값 관점에서 미존재/존재 쿠폰, 빈 문자열/None/공백 포함 등의 입력을 검증한 결과, 비존재 쿠폰을 None으로 표현하도록 한 수정은 규칙(BIZ-CPN-03)에 부합하며, 존재하는 쿠폰에 대해서는 원본과 동일하게 동작했습니다. 수정 미달(FIX 미달)과 회귀 모두 발견되지 않았습니다.",
+            "attempts": [
+              "과거 공격 메모리에서 coupon.find_coupon 관련 성공 사례 검색 — 없음",
+              "호출부 코드와 패치 확인: None or db.query_one(...) or None 형태로 조회 없음 시 None 반환 의도 파악",
+              "DB 스키마 제약(쿠폰 테이블 NOT NULL 컬럼들) 충족하도록 예시 데이터 구성(type, min_order 등 포함)",
+              "경계값 공격: 존재하는 코드(ABC123, XYZ999)와 바로 인접한 비존재 코드(ABC122), 빈 문자열(\"\"), None, 공백 포함(\" XYZ999 \")로 run_diff 실행 — 비존재는 원본 {} vs 수정본 None 차이 확인(의도된 수정), 존재하는 코드는 동일",
+              "회귀 공격: 결함 조건(비존재 쿠폰) 제외하고 존재하는 코드만 대상으로 property_attack 수행 — 불일치 없음"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          },
+          {
+            "angle": "types",
+            "label": "타입·빈 값",
+            "summary": "타입·빈 값 관점에서 미존재 코드, 빈 문자열, 공백, None, 음수, 큰 수, 특수문자 코드 등으로 공격했으나, 수정본은 BIZ-CPN-03의 존재 확인 규칙에 맞춰 None을 반환했고, 존재하는 쿠폰에 대해서는 원본과 동일하게 동작했다. 확인된 수정 미달 또는 회귀는 없다.",
+            "attempts": [
+              "공격 메모리 조회: DEMO-C 대상 함수(coupon.find_coupon)에 과거 성공 공격 없음.",
+              "DB 스키마 제약을 맞추기 위해 coupons 테이블의 최소 필드(type, value, min_order, used) 구성 파악.",
+              "빈 테이블에서 미존재 코드(MISSING)로 run_diff: 원본 {} vs 수정본 None 확인(규칙상 None 기대).",
+              "빈 테이블에서 경계/타입 값 공격: \"\", 공백만 문자열, None, 0, -1, 매우 큰 수, \"O'REILLY\" 등 → 원본 {} / 수정본 None(규칙 기대와 일치).",
+              "코드 인자에 리스트/딕트([]/{}) 사용 시 양쪽 모두 SQL 바인딩 오류 동일(ProgrammingError).",
+              "존재 쿠폰 레코드 삽입 후 코드 \"ABC\" 조회: 원본과 수정본이 동일 dict 반환.",
+              "회귀 탐지(property_attack): 존재 코드 집합(ABC, XYZ)만 대상으로 비교 → 불일치 0건."
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          },
+          {
+            "angle": "callers",
+            "label": "호출부 경로",
+            "summary": "호출부 경로 관점에서 coupon.load_usable_coupons를 통해 공격한 결과, 수정으로 결함 증상(KeyError)이 제거되고 규칙(BIZ-CPN-03)에 맞게 미존재 쿠폰이 제외되는 것을 확인했습니다. 존재 쿠폰만 포함되는 넓은 입력에 대한 회귀는 관찰되지 않았습니다. 수정 미달·회귀 모두 발견하지 못했습니다.",
+            "attempts": [
+              "공격 메모리 조회: coupon.find_coupon 관련 과거 성공 사례 없음",
+              "호출부 coupon.load_usable_coupons에 결함 조건(미존재 코드만 포함)으로 run_diff 실행 → 원본 KeyError('used'), 수정본 [] 반환 확인(BIZ-CPN-03 기대 동작 검증)",
+              "호출부 coupon.load_usable_coupons에 (미존재, 존재 혼합) 입력으로 run_diff 실행: 스키마 제약 충족(필수 컬럼 채움) 후 원본은 미존재 코드에서 KeyError, 수정본은 존재 쿠폰만 반환 확인",
+              "회귀 점검: coupons 테이블에 유효 쿠폰 A,B,C를 넣고, codes가 이들만 포함되도록 property_attack(40케이스) 실행 → 원본/수정본 모두 동일",
+              "경계값 점검: 만료 쿠폰(expires_at 과거) + now 미래로 run_diff → 원본/수정본 모두 []",
+              "경계값 점검: 소유자 불일치(customer_id=2, 호출 customer_id=1) run_diff → 원본/수정본 모두 []"
+            ],
+            "findings": 0,
+            "verified": 0,
+            "error": null
+          }
+        ],
+        "escalation": ""
+      },
+      "judge": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "intake_accepted",
+            "passed": true,
+            "detail": "증상: 쿠폰이 없는 경우에도 조회 결과가 비어 있는 값으로 돌아와, 없는 쿠폰으로 처리하기 어렵습니다. 사용 가능한 쿠폰을 확인할 때는 오류가 발생해 업무를 계속할 수 없습니다. 고객 등급 변경 과정에서도 대상 정보를 찾지 못하면 정상적인 안내 대신 오류가 발생합니다.",
+            "data": {}
+          },
+          {
+            "name": "ticket_symptom_linked",
+            "passed": true,
+            "detail": "증상 '쿠폰이 없는 경우에도 조회 결과가 비어 있는 값으로 돌아와, 없는 쿠폰으로 처리하기 어렵습니다. 사용 가능한 쿠폰을 확인할 때는 오류가 발생해 업무를 계속할 수 없습니다.' → test_find_coupon_returns_none_when_not_found: find_coupon 결과가 None이어야 함(비어 있는 dict 아님). test_load_usable_coupons_ignores_missing_code: 결과 리스트 == [] (오류 발생 아님).",
+            "data": {}
+          },
+          {
+            "name": "repro_original_fails",
+            "passed": true,
+            "detail": "통과 0, 실패 2: ['repro_tests/test_coupon_not_found_behavior.py::test_find_coupon_returns_none_when_not_found', 'repro_tests/test_coupon_not_found_behavior.py::test_load_usable_coupons_ignores_missing_code']",
+            "data": {}
+          },
+          {
+            "name": "repro_patched_passes",
+            "passed": true,
+            "detail": "통과 2, 실패 0",
+            "data": {}
+          },
+          {
+            "name": "existing_tests_pass",
+            "passed": true,
+            "detail": "통과 1124, 실패 0",
+            "data": {
+              "passed": 1124,
+              "failed": 0
+            }
+          },
+          {
+            "name": "change_scope",
+            "passed": true,
+            "detail": "대상 함수만 변경",
+            "data": {}
+          },
+          {
+            "name": "reference_property",
+            "passed": null,
+            "detail": "입력 생성 규칙 없음 — Hypothesis 비교 미평가",
+            "data": {}
+          },
+          {
+            "name": "attack_findings_rechecked",
+            "passed": null,
+            "detail": "공격이 제안한 입력 없음",
+            "data": {}
+          }
+        ]
+      },
+      "error": null
+    }
+  ],
+  "human_review_reason": null,
+  "decision": null,
+  "answer_check": {
+    "answer_method": "db.query_one",
+    "agent_method": "coupon.find_coupon",
+    "tests": {
+      "passed": false,
+      "detail": "통과 2, 실패 19: ['tests/test_customer.py::test_customer_summary', 'tests/test_customer.py::test_upgrade_grade_missing', 'tests/test_customer_dao.py::test_delete_customer']"
+    },
+    "patch_ok": false
+  },
+  "tokens_used": 406350,
+  "run_ids": [
+    "DEMO-C-20261022-153103"
+  ],
+  "updated_at": "2026-10-22T15:36:52"
+}

@@ -1,0 +1,681 @@
+{
+  "summary": {
+    "n": 10,
+    "detected": 10,
+    "by_flaw": {
+      "under_fix": {
+        "n": 6,
+        "detected": 6
+      },
+      "regression": {
+        "n": 4,
+        "detected": 4
+      }
+    },
+    "tokens": 1471659,
+    "verify_only": false
+  },
+  "rows": [
+    {
+      "case_id": "K01",
+      "method": "discount.apply_coupon",
+      "flaw": "under_fix",
+      "description": "0원 하한(BIZ-CPN-02)만 넣고, 최소 주문 금액을 여전히 원래 주문 금액으로 판단(BIZ-CPN-01 미반영)",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              120000,
+              [
+                {
+                  "type": "FIXED",
+                  "value": 80000,
+                  "min_order": 100000
+                },
+                {
+                  "type": "FIXED",
+                  "value": 10000,
+                  "min_order": 100000
+                }
+              ]
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": 30000
+              },
+              "patched": {
+                "ok": true,
+                "value": 30000
+              },
+              "reference": {
+                "ok": true,
+                "value": 40000
+              }
+            },
+            "kind": "under_fix"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 5개 중 정답과 다름 5개 (미달 5, 회귀 0). 예(미달): discount.apply_coupon([100000, {\"type\": \"FIXED\", \"value\": 5000, \"min_order\": 100000}, 99999]) → 수정본 {\"ok\": true, \"value\": 94999}, 원본 {\"ok\": true, \"value\": 94999}",
+      "proposed": 5,
+      "verified": 5,
+      "kinds": [
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 154840,
+      "seconds": 110.2
+    },
+    {
+      "case_id": "K02",
+      "method": "discount.apply_coupon",
+      "flaw": "under_fix",
+      "description": "최소 주문 금액을 현재 금액으로 판단(BIZ-CPN-01)했지만 0원 하한(BIZ-CPN-02)이 없음",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              50000,
+              [
+                {
+                  "type": "FIXED",
+                  "value": 80000,
+                  "min_order": 0
+                }
+              ]
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": -30000
+              },
+              "patched": {
+                "ok": true,
+                "value": -30000
+              },
+              "reference": {
+                "ok": true,
+                "value": 0
+              }
+            },
+            "kind": "under_fix"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 4개 중 정답과 다름 3개 (미달 3, 회귀 0). 예(미달): discount.apply_coupon([120000, {\"type\": \"FIXED\", \"value\": 10000, \"min_order\": 1}, 9990]) → 수정본 {\"ok\": true, \"value\": -10}, 원본 {\"ok\": true, \"value\": -10}",
+      "proposed": 4,
+      "verified": 4,
+      "kinds": [
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 191902,
+      "seconds": 120.6
+    },
+    {
+      "case_id": "K03",
+      "method": "discount.apply_coupon",
+      "flaw": "regression",
+      "description": "두 규칙은 모두 고쳤지만 결제 금액을 10원 단위로 내림 (결함과 무관한 금액이 바뀜)",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              12345,
+              [
+                {
+                  "type": "FIXED",
+                  "value": 1000,
+                  "min_order": 0
+                }
+              ]
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": 11345
+              },
+              "patched": {
+                "ok": true,
+                "value": 11340
+              },
+              "reference": {
+                "ok": true,
+                "value": 11345
+              }
+            },
+            "kind": "regression"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 4개 중 정답과 다름 4개 (미달 0, 회귀 4). 예(회귀): discount.apply_coupon([100003, {\"type\": \"FIXED\", \"value\": 1, \"min_order\": 1}]) → 수정본 {\"ok\": true, \"value\": 100000}, 원본 {\"ok\": true, \"value\": 100002}",
+      "proposed": 4,
+      "verified": 4,
+      "kinds": [
+        "regression"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 277259,
+      "seconds": 150.7
+    },
+    {
+      "case_id": "K04",
+      "method": "settlement.calc_due_date",
+      "flaw": "regression",
+      "description": "utcnow·pytz를 없앴지만 UTC 시각을 한국 시간으로 바꾸지 않고 그대로 월을 판단 (KST 자정~09시 월말 경계에서 바뀜)",
+      "flawed_check": {
+        "ok": false,
+        "problems": [
+          "기존 테스트에서 잡힘 (공격 없이도 판정이 막음): 통과 1144, 실패 1: ['tests/test_settlement.py::test_due_date_kst_month_boundary']"
+        ],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              {
+                "$datetime": "2024-01-31T16:00:00"
+              }
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": {
+                  "$date": "2024-03-08"
+                }
+              },
+              "patched": {
+                "ok": true,
+                "value": {
+                  "$date": "2024-02-07"
+                }
+              }
+            }
+          }
+        }
+      },
+      "used": false
+    },
+    {
+      "case_id": "K05",
+      "method": "customer_dao.find_by_name",
+      "flaw": "under_fix",
+      "description": "f-string은 그대로 두고 입력에서 작은따옴표만 지움 (O'Brien 같은 정상 이름을 못 찾음)",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              {
+                "$db": {
+                  "customers": [
+                    {
+                      "name": "O'Brien",
+                      "email": "o@x.com",
+                      "phone": "010-1111-2222",
+                      "grade": "BASIC"
+                    }
+                  ]
+                }
+              },
+              "O'Brien"
+            ],
+            "results": {
+              "original": {
+                "ok": false,
+                "exception": "OperationalError: near \"Brien\": syntax error"
+              },
+              "patched": {
+                "ok": true,
+                "value": []
+              },
+              "reference": {
+                "ok": true,
+                "value": [
+                  {
+                    "id": 1,
+                    "name": "O'Brien",
+                    "email": "o@x.com",
+                    "phone": "010-1111-2222",
+                    "grade": "BASIC",
+                    "created_at": null
+                  }
+                ]
+              }
+            },
+            "kind": "under_fix"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 3개 중 정답과 다름 3개 (미달 3, 회귀 0). 예(미달): customer_dao.find_by_name([{\"$db\": {\"customers\": [{\"id\": 1, \"name\": \"Alice\", \"email\": \"a@x.com\", \"phone\": \"010-1111-2222\", \"grade\": \"BASIC\"}, {\"id\": 2, \"name\": \"O'Connor\", \"email\": \"o@x.…) → 수정본 {\"ok\": true, \"value\": []}, 원본 {\"ok\": false, \"exception\": \"OperationalError: near \\\"Connor\\\": syntax error\"}",
+      "proposed": 3,
+      "verified": 3,
+      "kinds": [
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 75259,
+      "seconds": 89.5
+    },
+    {
+      "case_id": "K06",
+      "method": "customer_dao.find_by_name",
+      "flaw": "regression",
+      "description": "파라미터 바인딩으로 바꿨지만 = 대신 LIKE '%이름%'으로 바꿔 부분 일치도 돌려줌",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              {
+                "$db": {
+                  "customers": [
+                    {
+                      "name": "김민수",
+                      "email": "a@x.com",
+                      "phone": "010-1111-2222",
+                      "grade": "BASIC"
+                    }
+                  ]
+                }
+              },
+              "김민"
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": []
+              },
+              "patched": {
+                "ok": true,
+                "value": [
+                  {
+                    "id": 1,
+                    "name": "김민수",
+                    "email": "a@x.com",
+                    "phone": "010-1111-2222",
+                    "grade": "BASIC",
+                    "created_at": null
+                  }
+                ]
+              },
+              "reference": {
+                "ok": true,
+                "value": []
+              }
+            },
+            "kind": "regression"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 6개 중 정답과 다름 6개 (미달 0, 회귀 6). 예(회귀): customer_dao.find_by_name([{\"$db\": {\"customers\": [{\"name\": \"홍길동\", \"email\": \"hong@example.com\", \"phone\": \"010-1000-1000\", \"grade\": \"BASIC\"}, {\"name\": \"김홍길동\", \"email\": \"kimhong@example.com…) → 수정본 {\"ok\": true, \"value\": [{\"id\": 1, \"name\": \"홍길동\", \"email\": \"hong@example.com\", \"phone\": \"010-1000-1000\", \"grade\": \"BASIC\", \"created_at\": null}, {\"id\": 2, \"name\": …, 원본 {\"ok\": true, \"value\": [{\"id\": 1, \"name\": \"홍길동\", \"email\": \"hong@example.com\", \"phone\": \"010-1000-1000\", \"grade\": \"BASIC\", \"created_at\": null}]}",
+      "proposed": 6,
+      "verified": 6,
+      "kinds": [
+        "regression"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 147885,
+      "seconds": 114.1
+    },
+    {
+      "case_id": "K07",
+      "method": "customer_dao.find_by_name",
+      "flaw": "regression",
+      "description": "파라미터 바인딩으로 바꾸면서 이름 앞뒤 공백을 지움 (공백이 다른 이름도 같은 사람으로 찾음)",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              {
+                "$db": {
+                  "customers": [
+                    {
+                      "name": "김민수",
+                      "email": "a@x.com",
+                      "phone": "010-1111-2222",
+                      "grade": "BASIC"
+                    }
+                  ]
+                }
+              },
+              " 김민수"
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": []
+              },
+              "patched": {
+                "ok": true,
+                "value": [
+                  {
+                    "id": 1,
+                    "name": "김민수",
+                    "email": "a@x.com",
+                    "phone": "010-1111-2222",
+                    "grade": "BASIC",
+                    "created_at": null
+                  }
+                ]
+              },
+              "reference": {
+                "ok": true,
+                "value": []
+              }
+            },
+            "kind": "regression"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 7개 중 정답과 다름 7개 (미달 1, 회귀 6). 예(회귀): customer_dao.find_by_name([{\"$db\": {\"customers\": [{\"id\": 1, \"name\": \"Alice\", \"email\": \"a@x.com\", \"phone\": \"010-1111-1111\", \"grade\": \"BASIC\"}, {\"id\": 2, \"name\": \"Bob\", \"email\": \"b@x.com\",…) → 수정본 {\"ok\": true, \"value\": [{\"id\": 1, \"name\": \"Alice\", \"email\": \"a@x.com\", \"phone\": \"010-1111-1111\", \"grade\": \"BASIC\", \"created_at\": null}]}, 원본 {\"ok\": true, \"value\": []}",
+      "proposed": 7,
+      "verified": 7,
+      "kinds": [
+        "regression",
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 113051,
+      "seconds": 86.6
+    },
+    {
+      "case_id": "K08",
+      "method": "tax.calc_late_penalty",
+      "flaw": "under_fix",
+      "description": "지연 일수 0일만 0원으로 막고 음수 일수는 그대로 계산",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              1000000,
+              -3
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": -660
+              },
+              "patched": {
+                "ok": true,
+                "value": -660
+              },
+              "reference": {
+                "ok": true,
+                "value": 0
+              }
+            },
+            "kind": "under_fix"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 1개 중 정답과 다름 1개 (미달 1, 회귀 0). 예(미달): tax.calc_late_penalty([100000, -1]) → 수정본 {\"ok\": true, \"value\": -20}, 원본 {\"ok\": true, \"value\": -20}",
+      "proposed": 1,
+      "verified": 1,
+      "kinds": [
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 78532,
+      "seconds": 75.3
+    },
+    {
+      "case_id": "K09",
+      "method": "tax.calc_simplified_vat",
+      "flaw": "under_fix",
+      "description": "부가가치율이 상한을 넘을 때만 오류로 막고, 하한보다 작을 때는 여전히 0원",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              1000000,
+              1
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": 0
+              },
+              "patched": {
+                "ok": true,
+                "value": 0
+              },
+              "reference": {
+                "ok": false,
+                "exception": "ValueError: 부가가치율 범위 오류: 1"
+              }
+            },
+            "kind": "under_fix"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 4개 중 정답과 다름 4개 (미달 3, 회귀 1). 예(미달): tax.calc_simplified_vat([100000, 14]) → 수정본 {\"ok\": true, \"value\": 0}, 원본 {\"ok\": true, \"value\": 0}",
+      "proposed": 4,
+      "verified": 4,
+      "kinds": [
+        "regression",
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 120112,
+      "seconds": 91.0
+    },
+    {
+      "case_id": "K10",
+      "method": "notification.should_retry",
+      "flaw": "regression",
+      "description": "재시도할 수 없는 오류는 고쳤지만 최대 횟수 비교를 <에서 <=로 바꿔 한 번 더 재시도",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              "TIMEOUT",
+              3
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": false
+              },
+              "patched": {
+                "ok": true,
+                "value": true
+              },
+              "reference": {
+                "ok": true,
+                "value": false
+              }
+            },
+            "kind": "regression"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 1개 중 정답과 다름 1개 (미달 0, 회귀 1). 예(회귀): notification.should_retry([\"TIMEOUT\", 3]) → 수정본 {\"ok\": true, \"value\": true}, 원본 {\"ok\": true, \"value\": false}",
+      "proposed": 1,
+      "verified": 1,
+      "kinds": [
+        "regression"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 82636,
+      "seconds": 52.3
+    },
+    {
+      "case_id": "K11",
+      "method": "seller.calc_commission_rate",
+      "flaw": "regression",
+      "description": "영세 사업자 우대를 고쳤지만 수수료율 하한(MIN_COMMISSION_RATE)을 빼 버림",
+      "flawed_check": {
+        "ok": false,
+        "problems": [
+          "점검 입력에서 기준과 결과가 같음 (불완전하지 않음)"
+        ],
+        "probe": {
+          "inputs": 3,
+          "mismatches": 0,
+          "example": null
+        }
+      },
+      "used": false
+    },
+    {
+      "case_id": "K12",
+      "method": "review.calc_average_rating",
+      "flaw": "under_fix",
+      "description": "계산식은 고쳤지만 반올림을 내장 round()로 바꿔 x.x5에서 half-up이 아니라 내림처럼 동작",
+      "flawed_check": {
+        "ok": true,
+        "problems": [],
+        "probe": {
+          "inputs": 1,
+          "mismatches": 1,
+          "example": {
+            "input": [
+              [
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                5
+              ]
+            ],
+            "results": {
+              "original": {
+                "ok": true,
+                "value": 6560.0
+              },
+              "patched": {
+                "ok": true,
+                "value": 4.0
+              },
+              "reference": {
+                "ok": true,
+                "value": 4.1
+              }
+            },
+            "kind": "under_fix"
+          }
+        }
+      },
+      "used": true,
+      "detected": true,
+      "recheck": "공격 입력 3개 중 정답과 다름 3개 (미달 3, 회귀 0). 예(미달): review.calc_average_rating([[3, 3, 3, 4]]) → 수정본 {\"ok\": true, \"value\": 3.2}, 원본 {\"ok\": true, \"value\": 211.2}",
+      "proposed": 3,
+      "verified": 3,
+      "kinds": [
+        "under_fix"
+      ],
+      "rounds": [
+        "boundary",
+        "types",
+        "callers"
+      ],
+      "tokens": 230183,
+      "seconds": 140.3
+    }
+  ]
+}

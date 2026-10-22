@@ -1,0 +1,261 @@
+{
+  "kpi": [
+    {
+      "name": "결함 위치 Top-3 정확도",
+      "target": "0.80 이상",
+      "method": "평가 분할 티켓 524건(결함 단위 분할), 혼합형 XGBoost Ranker",
+      "value": "0.803 (E2E 홀드아웃 모델 Top-3 85%, 에이전트 최종 위치 95%)",
+      "ok": true
+    },
+    {
+      "name": "SR당 처리 시간",
+      "target": "2시간 → 15분",
+      "method": "시연 티켓 S1~S3의 접수부터 승인 요청까지 (재생 데이터 실행 기록)",
+      "value": "S1 4.9분, S2 8.3분, S3 2.8분 (E2E 평균 5.1분)",
+      "ok": true
+    },
+    {
+      "name": "공격 에이전트 탐지율",
+      "target": "80% 이상",
+      "method": "일부러 불완전하게 만든 패치 10건 중 미달·회귀 탐지 수 (판정이 공격 입력을 재실행해 확인)",
+      "value": "10/10 (100%; 미달 6/6, 회귀 4/4)",
+      "ok": true
+    },
+    {
+      "name": "근거 인용률",
+      "target": "80% 이상",
+      "method": "마지막 패치 설명 본문에 규칙 ID·이력 ID가 포함된 비율 (E2E 전체 기능 + 시연 S1~S3)",
+      "value": "E2E 100% (필드 기준 100%), 시연 3/3",
+      "ok": true
+    },
+    {
+      "name": "E2E 해결률",
+      "target": "60% 이상 (가정치)",
+      "method": "홀드아웃 20건 중 사람 개입 없이 판정 노드를 통과한 비율",
+      "value": "19/20 (95%), 숨긴 테스트까지 통과 19/20",
+      "ok": true
+    },
+    {
+      "name": "예측 도구 기여",
+      "target": "해결률 향상",
+      "method": "Ablation: predict_fault_location 유무별 해결률·토큰·소요 시간",
+      "value": "해결률 95% vs 끔 90% (+5%p), 토큰 평균 -11,362, 시간 +9초",
+      "ok": true
+    },
+    {
+      "name": "회귀 누출",
+      "target": "1건 이하",
+      "method": "Ablation: 공격 단계 유무별, 판정 통과 후 숨은 회귀 테스트에 걸린 패치 수",
+      "value": "공격 사용 0건 vs 공격 끔 0건",
+      "ok": true
+    },
+    {
+      "name": "자동 검증 통과",
+      "target": "3유형 모두",
+      "method": "시연 시나리오 3개(결함 수정·코드 표준화·보안 조치)가 판정 노드 통과",
+      "value": "3/3 (S1 1회째 통과, S2 2회째 통과, S3 1회째 통과)",
+      "ok": true
+    }
+  ],
+  "demos": [
+    {
+      "ticket_id": "SR-2041",
+      "scenario": "S1",
+      "type": "defect",
+      "passed": true,
+      "attempts": 1,
+      "seconds": 294.0,
+      "cited": true,
+      "cited_ids": [
+        "BIZ-CPN-01",
+        "BIZ-CPN-02",
+        "HIS-f45ea821"
+      ],
+      "field_ids": [
+        "BIZ-CPN-02",
+        "BIZ-CPN-01",
+        "HIS-f45ea821"
+      ]
+    },
+    {
+      "ticket_id": "SR-2077",
+      "scenario": "S2",
+      "type": "standardize",
+      "passed": true,
+      "attempts": 2,
+      "seconds": 496.0,
+      "cited": true,
+      "cited_ids": [
+        "DEP-TZ-01",
+        "DEP-TZ-02",
+        "DEP-DT-01",
+        "STY-01",
+        "BIZ-SET-01",
+        "BIZ-TIM-01"
+      ],
+      "field_ids": [
+        "BIZ-SET-01",
+        "BIZ-TIM-01",
+        "DEP-TZ-01",
+        "DEP-TZ-02",
+        "DEP-DT-01",
+        "STY-01"
+      ]
+    },
+    {
+      "ticket_id": "SR-2103",
+      "scenario": "S3",
+      "type": "security",
+      "passed": true,
+      "attempts": 1,
+      "seconds": 167.0,
+      "cited": true,
+      "cited_ids": [
+        "SEC-SQL-01",
+        "SEC-LOG-03"
+      ],
+      "field_ids": [
+        "SEC-SQL-01",
+        "SEC-LOG-03"
+      ]
+    }
+  ],
+  "attack_kpi": {
+    "n": 10,
+    "detected": 10,
+    "by_flaw": {
+      "under_fix": {
+        "n": 6,
+        "detected": 6
+      },
+      "regression": {
+        "n": 4,
+        "detected": 4
+      }
+    },
+    "tokens": 1471659,
+    "verify_only": false
+  },
+  "conditions": {
+    "full": {
+      "n": 20,
+      "solved": 19,
+      "solved_rate": 0.95,
+      "hidden_pass": 19,
+      "regression_leaks": 0,
+      "citation_rate": 1.0,
+      "citation_field_rate": 1.0,
+      "model_top3_rate": 0.85,
+      "agent_location_rate": 0.95,
+      "mean_attempts": 0.95,
+      "passed_at_attempt": {
+        "1": 19,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "tokens_total": 5741446,
+      "tokens_mean": 287072,
+      "cost_usd_total": 7.76,
+      "seconds_mean": 305.6,
+      "by_inject_type": {
+        "ast": {
+          "n": 11,
+          "solved_rate": 1.0
+        },
+        "llm": {
+          "n": 9,
+          "solved_rate": 0.889
+        }
+      },
+      "attack_rounds_total": 57,
+      "found_by_angle": {
+        "boundary": 4,
+        "types": 5,
+        "callers": 2,
+        "combination": 0,
+        "property": 0
+      }
+    },
+    "no_predict": {
+      "n": 20,
+      "solved": 18,
+      "solved_rate": 0.9,
+      "hidden_pass": 18,
+      "regression_leaks": 0,
+      "citation_rate": 1.0,
+      "citation_field_rate": 1.0,
+      "model_top3_rate": 0.85,
+      "agent_location_rate": 0.95,
+      "mean_attempts": 0.9,
+      "passed_at_attempt": {
+        "1": 18,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "tokens_total": 5968679,
+      "tokens_mean": 298434,
+      "cost_usd_total": 7.5,
+      "seconds_mean": 296.4,
+      "by_inject_type": {
+        "ast": {
+          "n": 11,
+          "solved_rate": 1.0
+        },
+        "llm": {
+          "n": 9,
+          "solved_rate": 0.778
+        }
+      },
+      "attack_rounds_total": 54,
+      "found_by_angle": {
+        "boundary": 0,
+        "types": 4,
+        "callers": 1,
+        "combination": 0,
+        "property": 0
+      }
+    },
+    "no_attack": {
+      "n": 20,
+      "solved": 19,
+      "solved_rate": 0.95,
+      "hidden_pass": 19,
+      "regression_leaks": 0,
+      "citation_rate": 1.0,
+      "citation_field_rate": 1.0,
+      "model_top3_rate": 0.85,
+      "agent_location_rate": 1.0,
+      "mean_attempts": 1.15,
+      "passed_at_attempt": {
+        "1": 19,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "tokens_total": 3148957,
+      "tokens_mean": 157448,
+      "cost_usd_total": 4.09,
+      "seconds_mean": 220.3,
+      "by_inject_type": {
+        "ast": {
+          "n": 11,
+          "solved_rate": 1.0
+        },
+        "llm": {
+          "n": 9,
+          "solved_rate": 0.889
+        }
+      },
+      "attack_rounds_total": 0,
+      "found_by_angle": {
+        "boundary": 0,
+        "types": 0,
+        "callers": 0,
+        "combination": 0,
+        "property": 0
+      }
+    }
+  }
+}

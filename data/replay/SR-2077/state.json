@@ -66,11 +66,33 @@
       "reference": null,
       "attack_inputs": [],
       "hidden_tests": []
-    }
+    },
+    "demo_case": null,
+    "answer_method": null,
+    "answer_tests": []
   },
   "status": "approval_pending",
+  "intake": {
+    "accepted": true,
+    "problems": [],
+    "output": {
+      "is_change_request": true,
+      "in_domain": true,
+      "symptom_quote": "정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거하고, 팀 코딩 표준에 맞게 정리해 주세요.",
+      "expected_behavior": "정산 마감일 계산에서 datetime.utcnow()·pytz 사용이 제거되고 팀 코딩 표준에 맞게 정리된 상태",
+      "missing": [
+        "팀 코딩 표준의 구체 기준(시간/시간대 처리 규칙, 권장 라이브러리 및 패턴: 예. zoneinfo 사용, datetime.now(timezone.utc) 등)",
+        "정산 마감일 계산의 기준 타임존과 기대 동작(현재 결과와 동등해야 하는지, 함수 입출력의 tz-aware/naive 규약)",
+        "적용 범위 확인(settlement.calc_due_date만 대상인지, 관련 유틸/호출부 포함 여부)",
+        "회귀 방지를 위한 테스트 케이스 또는 기대값 예시",
+        "적용 브랜치와 릴리스 목표 시점(있다면)"
+      ],
+      "reason": "정산 도메인의 함수에 대해 시간 처리 방식 교체와 코드 표준 적용을 요청하는 코드 표준화 SR로 명확하며, 대상 시스템 범위에 해당한다."
+    }
+  },
   "analysis": null,
   "prediction": [],
+  "prediction_signal": null,
   "repro_verified": false,
   "analysis_tries": 0,
   "attempts": [
@@ -78,7 +100,7 @@
       "number": 1,
       "fix": {
         "method": "settlement.calc_due_date",
-        "patch_summary": "동작은 그대로 유지하면서 팀 표준에 맞게 시간대 처리와 현재 시각 획득 방식을 표준화했다. 구체적으로 (1) datetime.utcnow()를 datetime.now(timezone.utc).replace(tzinfo=None)로 바꿔 Deprecation 경고를 없애고 기존 naive UTC 동작을 동일하게 유지(DEP-DT-01), (2) pytz 사용을 제거하고 zoneinfo.ZoneInfo와 aware datetime 변환(order_dt.replace(tzinfo=timezone.utc).astimezone(...))으로 대체해 표준 라이브러리를 사용(DEP-TZ-01, DEP-TZ-02), (3) 공개 함수에 타입 힌트를 추가(STY-01). 한국 시간으로 주문 월을 판단해 월말 기준으로 5영업일을 더하는 업무 규칙은 그대로 유지됨을 확인(BIZ-SET-01, BIZ-TIM-01). 모듈의 import에서 pytz를 제거하고, timezone/ZoneInfo를 추가했다.",
+        "patch_summary": "코드 표준화 수행. 다음을 적용했다: 1) 지원 종료 예정 API 대체: datetime.utcnow()를 datetime.now(timezone.utc)로 교체해 시간대 정보를 포함하도록 정리(DEP-DT-01). 2) pytz 사용 제거: pytz.timezone 및 pytz.utc.localize 사용을 표준 라이브러리 zoneinfo(ZoneInfo)와 timezone.utc 기반 처리로 교체(DEP-TZ-01, DEP-TZ-02). 기존 코드가 naive UTC만 허용하던 동작을 유지하기 위해 tz-aware datetime이 입력되면 이전과 동일하게 ValueError를 발생시키도록 처리했다. 3) 공개 함수 타입 힌트 추가: 인자 order_dt와 반환값 date에 타입 힌트 추가하여 팀 스타일을 준수(STY-01). 4) 불필요해진 import 정리: settlement.py에서 import pytz 제거, 필요한 from datetime import timezone 및 from zoneinfo import ZoneInfo 추가(DEP-TZ-01). 동작은 한국 시간대 기준 월말 마감 후 영업일 계산 로직을 그대로 유지(BIZ-SET-01, BIZ-TIM-01).",
         "rule_ids": [
           "BIZ-SET-01",
           "BIZ-TIM-01",
@@ -89,46 +111,44 @@
         ],
         "history_ids": []
       },
-      "diff": "--- a/src/order_settlement/settlement.py\n+++ b/src/order_settlement/settlement.py\n@@ -4,7 +4,8 @@\n from typing import Tuple\n \n-import pytz\n \n from order_settlement import config, coupon, customer_dao, date_utils, db, discount, order, payment\n+from datetime import timezone\n+from zoneinfo import ZoneInfo\n \n \n@@ -26,5 +27,5 @@\n \n \n-def calc_due_date(order_dt=None):\n+def calc_due_date(order_dt: datetime | None = None) -> date:\n     \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n \n@@ -32,7 +33,8 @@\n     \"\"\"\n     if order_dt is None:\n-        order_dt = datetime.utcnow()\n-    kst = pytz.timezone(config.TIMEZONE_NAME)\n-    local = pytz.utc.localize(order_dt).astimezone(kst)\n+        # utcnow() 대신 now(timezone.utc) 사용 후 naive로 맞춘다 (동작 동일)\n+        order_dt = datetime.now(timezone.utc).replace(tzinfo=None)\n+    tz = ZoneInfo(config.TIMEZONE_NAME)\n+    local = order_dt.replace(tzinfo=timezone.utc).astimezone(tz)\n     month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n     return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)\n",
+      "diff": "--- a/src/order_settlement/settlement.py\n+++ b/src/order_settlement/settlement.py\n@@ -4,7 +4,8 @@\n from typing import Tuple\n \n-import pytz\n \n from order_settlement import config, coupon, customer_dao, date_utils, db, discount, order, payment\n+from datetime import timezone\n+from zoneinfo import ZoneInfo\n \n \n@@ -26,5 +27,5 @@\n \n \n-def calc_due_date(order_dt=None):\n+def calc_due_date(order_dt: datetime | None = None) -> date:\n     \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n \n@@ -32,7 +33,13 @@\n     \"\"\"\n     if order_dt is None:\n-        order_dt = datetime.utcnow()\n-    kst = pytz.timezone(config.TIMEZONE_NAME)\n-    local = pytz.utc.localize(order_dt).astimezone(kst)\n+        # aware UTC now (DEP-DT-01)\n+        _utc = datetime.now(timezone.utc)\n+    else:\n+        # 기존 코드(pytz.utc.localize)는 naive가 아니면 예외를 냈다 (DEP-TZ-02).\n+        if getattr(order_dt, \"tzinfo\", None) is not None and order_dt.tzinfo.utcoffset(order_dt) is not None:\n+            raise ValueError(\"Not naive datetime (must be naive)\")\n+        _utc = order_dt.replace(tzinfo=timezone.utc)\n+    kst = ZoneInfo(config.TIMEZONE_NAME)\n+    local = _utc.astimezone(kst)\n     month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n     return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)\n",
+      "before_code": "def calc_due_date(order_dt=None):\n    \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n\n    order_dt: UTC naive datetime. 없으면 현재 시각.\n    \"\"\"\n    if order_dt is None:\n        order_dt = datetime.utcnow()\n    kst = pytz.timezone(config.TIMEZONE_NAME)\n    local = pytz.utc.localize(order_dt).astimezone(kst)\n    month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n    return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)",
+      "after_code": "def calc_due_date(order_dt: datetime | None = None) -> date:\n    \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n\n    order_dt: UTC naive datetime. 없으면 현재 시각.\n    \"\"\"\n    if order_dt is None:\n        # aware UTC now (DEP-DT-01)\n        _utc = datetime.now(timezone.utc)\n    else:\n        # 기존 코드(pytz.utc.localize)는 naive가 아니면 예외를 냈다 (DEP-TZ-02).\n        if getattr(order_dt, \"tzinfo\", None) is not None and order_dt.tzinfo.utcoffset(order_dt) is not None:\n            raise ValueError(\"Not naive datetime (must be naive)\")\n        _utc = order_dt.replace(tzinfo=timezone.utc)\n    kst = ZoneInfo(config.TIMEZONE_NAME)\n    local = _utc.astimezone(kst)\n    month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n    return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)",
       "attack": {
-        "summary": "[경계값] 경계값(월말·UTC 15시) 주변 naive 입력에서는 원본과 수정본이 동일해 표준화가 잘 적용되었다. 그러나 tz-aware datetime 입력에 대해 원본은 예외를 던지던 동작이 수정본에서 조용히 진행되도록 변경되어 회귀가 발생했다. 표준화 티켓에서는 동작 보존이 요구되므로, tz-aware 입력에서의 예외 발생 동작 변경은 회귀로 판단된다.\n[타입·빈 값] 표준화 패치에서 tz-aware datetime 입력 처리 동작이 바뀌었다. 원본은 tz-aware 입력에 대해 ValueError를 던졌지만, 수정본은 tz 정보를 UTC로 강제 설정해 계산을 진행한다. 이는 표준화 티켓의 “동작은 그대로 유지” 조건을 위반하는 회귀다. naive datetime 및 None 입력에서는 차이가 없음을 property_attack으로 확인했다.\n[호출부 경로] 호출부 경로 관점에서 코드를 검토한 결과, settle_order는 created_at 문자열을 strptime으로 파싱해 calc_due_date에 전달하므로(통상 naive UTC), 수정 전후 동작 차이가 발생할 가능성이 낮습니다. 과거 기록상 tz-aware 입력에 대한 회귀 가능성은 있으나, 이번 관점(호출 경로)에서는 해당 형태의 입력이 유입되는지 확인·재현하지 못했고, 도구 실행 한도 초과로 run_diff/property 검증을 수행하지 못했습니다. 따라서 이번 라운드에서는 확정된 발견이 없습니다.",
+        "summary": "[경계값] 경계값 테스트에서는 원본과 수정본이 동일하게 동작했다. 다만 tz-aware 입력에서 예외 메시지가 달라지는 회귀를 확인했다.\n[타입·빈 값] 타입·빈 값 관점에서 공격하여 2건의 회귀를 확인했다. 1) tz-aware datetime 입력 시 예외 메시지가 원본과 달라졌고, 2) 잘못된 타입(str) 입력 시 예외 종류가 AttributeError→TypeError로 바뀌었다. 유효 입력 영역(None 및 naive datetime 전역)에서는 차이가 없음을 property_attack으로 확인했다.\n[호출부 경로] 이번 라운드는 호출부 경로 관점으로 공격했다. settle_order는 created_at을 naive datetime으로 파싱해 calc_due_date에 전달하므로, 과거에 보고된 tz-aware 입력 회귀는 이 호출 경로로는 재현되지 않는다. 호출부를 통해 경계(UTC 15시 전후)와 월말 케이스를 검증하려 했으나, 인메모리 DB 스키마 제약으로 settle_order가 order_items 필수 컬럼 오류로 원본/수정본 모두 동일하게 실패하여 calc_due_date까지 도달하지 못했다. 따라서 호출부 경로 기준으로는 수정 미달/회귀 모두 확인된 바 없다. 후속으로는 order_items 테이블의 필수 컬럼을 모두 채운 테스트 데이터를 준비해 동일 케이스(월말 14:59:59/15:00:00, 다양한 월/대형값)를 재실행해 확인하는 것을 제안한다.",
         "attempts": [
-          "[경계값] 공격 기록 조회로 tz-aware 입력에서의 예외/무예외 동작 차이 사례를 확인했다.",
-          "[경계값] 수정된 settlement.calc_due_date 소스와 호출자 settle_order를 읽어 입력 특성(naive UTC 기대)을 파악했다.",
-          "[경계값] 경계값 공격: UTC 15시 월경계 주변(2024-01-31 14:59:59, 15:00:00, 2024-02-01 00:00:00), 윤일 경계(2024-02-29 14:59:59, 15:00:00), 일반 중간값(2024-06-15 12:00:00)에서 run_diff 실행 — 원본과 수정본 결과 동일(문제 없음).",
-          "[경계값] 회귀 확인: tz-aware UTC 입력 2024-03-31T10:00:00+00:00에서 run_diff — 원본은 ValueError, 수정본은 날짜 반환으로 차이 확인.",
-          "[경계값] 회귀 확인: DST 경계권 유럽 시간대 입력 2024-10-27T00:30:00+01:00에서 run_diff — 원본은 ValueError, 수정본은 날짜 반환으로 차이 확인.",
-          "[경계값] 회귀 범위 점검(property_attack): 2024년 범위의 naive/aware 시각 샘플 혼합으로 비교 — 여러 tz-aware 사례에서 동일한 회귀 차이 재현됨.",
-          "[타입·빈 값] attack_memory로 settlement.calc_due_date 과거 성공 사례 확인: tz-aware datetime에서 예외 발생 동작이 변경됨",
-          "[타입·빈 값] read_method로 수정본 소스 확인: order_dt.replace(tzinfo=timezone.utc) 사용으로 tz-aware 입력이 더 이상 예외가 아님을 파악",
-          "[타입·빈 값] get_callers로 호출자 목록 확인: settlement.settle_order",
-          "[타입·빈 값] run_diff: 입력 None으로 기본 동작 확인(차이 없음)",
-          "[타입·빈 값] run_diff: tz-aware UTC datetime(2024-03-31T10:00:00+00:00)로 실행 — 원본은 ValueError, 수정본은 2024-04-05 반환",
-          "[타입·빈 값] run_diff: tz-aware +01:00 datetime(2024-10-27T00:30:00+01:00)로 실행 — 원본은 ValueError, 수정본은 2024-11-07 반환",
-          "[타입·빈 값] property_attack: None 또는 naive datetime(2024년 범위 및 월말 경계 샘플 포함)에서 광범위 비교 — 불일치 0건",
-          "[호출부 경로] 과거 성공 사례 조회: tz-aware datetime 입력 시 기존 구현은 예외, 수정본은 예외 미발생(회귀 가능성) 기록을 확인",
-          "[호출부 경로] 호출부 분석: settlement.settle_order가 calc_due_date를 호출하며 created_at을 datetime.strptime(...)로 파싱해 전달함을 확인(일반적으로 naive UTC가 전달될 가능성 높음)",
-          "[호출부 경로] 보조 로직 확인: date_utils.add_business_days 동작(월말 다음날부터 영업일 N일 계산) 검토",
-          "[호출부 경로] 미달 검증 설계(호출 경로): settle_order를 통해 created_at 경계값(UTC 14:59:59, 15:00:00, 말일/초일) 사례를 만들어 run_diff로 원본/수정본 및 기대치 비교 예정이었으나 실행 불가",
-          "[호출부 경로] 회귀 검증 설계(호출 경로): 결함 조건이 성립하지 않는 일반 주문들에 대해 property 기반으로 넓게 비교 계획이었으나 실행 불가"
+          "[경계값] 과거 성공 사례 재현: tz-aware 입력(2024-03-31T10:00:00+00:00)로 run_diff 실행해 원본/수정본 예외 비교",
+          "[경계값] 경계값(월말 UTC 15시 직전) 입력 2024-06-30 14:59:59로 run_diff 실행: 둘 다 2024-07-05 반환 확인",
+          "[경계값] 경계값(월말 UTC 15시) 입력 2024-06-30 15:00:00로 run_diff 실행: 둘 다 2024-08-07 반환 확인",
+          "[경계값] 경계값(월말 UTC 15시 직전/직후) 2024-03-31 14:59:59, 15:00:00로 run_diff: 둘 다 각각 2024-04-05, 2024-05-08 반환 확인",
+          "[경계값] property_attack: 2024년 내 임의 naive datetime과 월말 14:59:59/15:00:00 샘플 혼합 100건에 대해 원본=수정본 확인(불일치 0)",
+          "[타입·빈 값] 공격 메모리의 tz-aware 입력 그대로 재현: 2024-03-31T10:00:00+00:00",
+          "[타입·빈 값] 타입 가장자리: 빈 문자열(\"\") 전달",
+          "[타입·빈 값] 타입 가장자리: 빈 리스트([]) 전달",
+          "[타입·빈 값] 계약 경계: None 명시 전달하여 기본(now) 경로 검증",
+          "[타입·빈 값] 회귀 광역 탐색: None/naive datetime(2024년 전역)에서 원본과 수정본 동치 property_attack 수행",
+          "[호출부 경로] 과거 성공 공격 검토: calc_due_date에 tz-aware datetime 입력 시 예외 유지 회귀 사례 2건 확인(직접 호출 케이스).",
+          "[호출부 경로] 호출부 코드 확인: settle_order가 created_at 문자열을 datetime.strptime로 파싱해 calc_due_date에 전달하므로 tz-aware 입력 경로는 호출부를 통해 도달 불가.",
+          "[호출부 경로] 미달 경계 공격 설계: 월말 경계(KST 기준) 검증을 위해 settle_order 호출로 created_at을 2024-06-30 14:59:59 등으로 설정해 실행 시도.",
+          "[호출부 경로] run_diff 1차 실행: 최소 컬럼으로 order_items 행 삽입했으나 스키마 불일치로 \"table order_items has no column named sku\" 에러(원본/수정본 동일 실패).",
+          "[호출부 경로] run_diff 2차 실행: sku 제거 등 스키마 조정 후 재시도했으나 \"NOT NULL constraint failed: order_items.product_name\" 에러(원본/수정본 동일 실패).",
+          "[호출부 경로] 도구 호출 한도 도달로 추가 케이스 실행 불가."
         ],
         "findings": [
           {
             "kind": "regression",
             "method": "settlement.calc_due_date",
-            "input_json": "[{\"$datetime\": \"2024-03-31T10:00:00+00:00\"}]",
-            "expected_json": "{\"$exception\": \"ValueError: Not naive datetime (tzinfo is already set)\"}",
+            "input_json": "[{\"$datetime\":\"2024-03-31T10:00:00+00:00\"}]",
+            "expected_json": "{\"$exception\":\"ValueError: Not naive datetime (tzinfo is already set)\"}",
             "rule_id": "",
-            "explanation": "원본은 pytz.utc.localize(order_dt)를 사용해 tz-aware datetime 입력 시 ValueError를 발생시켰다. 수정본은 order_dt.replace(tzinfo=timezone.utc)로 tz 정보를 강제로 덮어쓰고 계산을 진행해 날짜를 반환한다. 표준화 티켓에서는 동작 보존이 요구되므로 tz-aware 입력에서의 예외 발생 동작 변경은 회귀에 해당한다.",
+            "explanation": "tz-aware datetime 입력 시 원본은 ValueError(\"Not naive datetime (tzinfo is already set)\")를 던지는데, 수정본은 동일한 타입(ValueError)이나 다른 메시지(\"Not naive datetime (must be naive)\")를 던진다. 표준화 티켓에서 동작 보존이 요구되므로 예외 메시지 변경은 회귀에 해당할 수 있다.",
             "original": {
               "ok": false,
               "exception": "ValueError: Not naive datetime (tzinfo is already set)"
             },
             "patched": {
-              "ok": true,
-              "value": {
-                "$date": "2024-04-05"
-              }
+              "ok": false,
+              "exception": "ValueError: Not naive datetime (must be naive)"
             },
             "verified": true,
             "check": "수정본이 원본과 다름",
@@ -137,23 +157,21 @@
           {
             "kind": "regression",
             "method": "settlement.calc_due_date",
-            "input_json": "[{\"$datetime\": \"2024-10-27T00:30:00+01:00\"}]",
-            "expected_json": "{\"$exception\": \"ValueError: Not naive datetime (tzinfo is already set)\"}",
+            "input_json": "[\"\"]",
+            "expected_json": "{\"$exception\":\"AttributeError: 'str' object has no attribute 'tzinfo'\"}",
             "rule_id": "",
-            "explanation": "원본은 tz-aware datetime 입력에 대해 동일하게 ValueError를 발생시켰으나, 수정본은 tz 정보를 무시하고 UTC로 간주해 결과를 반환한다. 표준화(동작 동일 유지) 요구와 달리 비결함 영역에서 동작이 달라진 회귀다.",
+            "explanation": "잘못된 타입(str) 입력에서 원본은 pytz.utc.localize 단계에서 tzinfo 속성 접근으로 AttributeError가 발생했으나, 수정본은 str.replace(tzinfo=...) 호출로 TypeError가 발생한다. 결함과 무관한 입력에서 예외 종류가 바뀐 회귀다.",
             "original": {
               "ok": false,
-              "exception": "ValueError: Not naive datetime (tzinfo is already set)"
+              "exception": "AttributeError: 'str' object has no attribute 'tzinfo'"
             },
             "patched": {
-              "ok": true,
-              "value": {
-                "$date": "2024-11-07"
-              }
+              "ok": false,
+              "exception": "TypeError: str.replace() takes no keyword arguments"
             },
             "verified": true,
             "check": "수정본이 원본과 다름",
-            "angle": "boundary"
+            "angle": "types"
           }
         ],
         "saved_to_memory": 2,
@@ -163,31 +181,28 @@
           {
             "angle": "boundary",
             "label": "경계값",
-            "summary": "경계값(월말·UTC 15시) 주변 naive 입력에서는 원본과 수정본이 동일해 표준화가 잘 적용되었다. 그러나 tz-aware datetime 입력에 대해 원본은 예외를 던지던 동작이 수정본에서 조용히 진행되도록 변경되어 회귀가 발생했다. 표준화 티켓에서는 동작 보존이 요구되므로, tz-aware 입력에서의 예외 발생 동작 변경은 회귀로 판단된다.",
+            "summary": "경계값 테스트에서는 원본과 수정본이 동일하게 동작했다. 다만 tz-aware 입력에서 예외 메시지가 달라지는 회귀를 확인했다.",
             "attempts": [
-              "공격 기록 조회로 tz-aware 입력에서의 예외/무예외 동작 차이 사례를 확인했다.",
-              "수정된 settlement.calc_due_date 소스와 호출자 settle_order를 읽어 입력 특성(naive UTC 기대)을 파악했다.",
-              "경계값 공격: UTC 15시 월경계 주변(2024-01-31 14:59:59, 15:00:00, 2024-02-01 00:00:00), 윤일 경계(2024-02-29 14:59:59, 15:00:00), 일반 중간값(2024-06-15 12:00:00)에서 run_diff 실행 — 원본과 수정본 결과 동일(문제 없음).",
-              "회귀 확인: tz-aware UTC 입력 2024-03-31T10:00:00+00:00에서 run_diff — 원본은 ValueError, 수정본은 날짜 반환으로 차이 확인.",
-              "회귀 확인: DST 경계권 유럽 시간대 입력 2024-10-27T00:30:00+01:00에서 run_diff — 원본은 ValueError, 수정본은 날짜 반환으로 차이 확인.",
-              "회귀 범위 점검(property_attack): 2024년 범위의 naive/aware 시각 샘플 혼합으로 비교 — 여러 tz-aware 사례에서 동일한 회귀 차이 재현됨."
+              "과거 성공 사례 재현: tz-aware 입력(2024-03-31T10:00:00+00:00)로 run_diff 실행해 원본/수정본 예외 비교",
+              "경계값(월말 UTC 15시 직전) 입력 2024-06-30 14:59:59로 run_diff 실행: 둘 다 2024-07-05 반환 확인",
+              "경계값(월말 UTC 15시) 입력 2024-06-30 15:00:00로 run_diff 실행: 둘 다 2024-08-07 반환 확인",
+              "경계값(월말 UTC 15시 직전/직후) 2024-03-31 14:59:59, 15:00:00로 run_diff: 둘 다 각각 2024-04-05, 2024-05-08 반환 확인",
+              "property_attack: 2024년 내 임의 naive datetime과 월말 14:59:59/15:00:00 샘플 혼합 100건에 대해 원본=수정본 확인(불일치 0)"
             ],
-            "findings": 2,
-            "verified": 2,
+            "findings": 1,
+            "verified": 1,
             "error": null
           },
           {
             "angle": "types",
             "label": "타입·빈 값",
-            "summary": "표준화 패치에서 tz-aware datetime 입력 처리 동작이 바뀌었다. 원본은 tz-aware 입력에 대해 ValueError를 던졌지만, 수정본은 tz 정보를 UTC로 강제 설정해 계산을 진행한다. 이는 표준화 티켓의 “동작은 그대로 유지” 조건을 위반하는 회귀다. naive datetime 및 None 입력에서는 차이가 없음을 property_attack으로 확인했다.",
+            "summary": "타입·빈 값 관점에서 공격하여 2건의 회귀를 확인했다. 1) tz-aware datetime 입력 시 예외 메시지가 원본과 달라졌고, 2) 잘못된 타입(str) 입력 시 예외 종류가 AttributeError→TypeError로 바뀌었다. 유효 입력 영역(None 및 naive datetime 전역)에서는 차이가 없음을 property_attack으로 확인했다.",
             "attempts": [
-              "attack_memory로 settlement.calc_due_date 과거 성공 사례 확인: tz-aware datetime에서 예외 발생 동작이 변경됨",
-              "read_method로 수정본 소스 확인: order_dt.replace(tzinfo=timezone.utc) 사용으로 tz-aware 입력이 더 이상 예외가 아님을 파악",
-              "get_callers로 호출자 목록 확인: settlement.settle_order",
-              "run_diff: 입력 None으로 기본 동작 확인(차이 없음)",
-              "run_diff: tz-aware UTC datetime(2024-03-31T10:00:00+00:00)로 실행 — 원본은 ValueError, 수정본은 2024-04-05 반환",
-              "run_diff: tz-aware +01:00 datetime(2024-10-27T00:30:00+01:00)로 실행 — 원본은 ValueError, 수정본은 2024-11-07 반환",
-              "property_attack: None 또는 naive datetime(2024년 범위 및 월말 경계 샘플 포함)에서 광범위 비교 — 불일치 0건"
+              "공격 메모리의 tz-aware 입력 그대로 재현: 2024-03-31T10:00:00+00:00",
+              "타입 가장자리: 빈 문자열(\"\") 전달",
+              "타입 가장자리: 빈 리스트([]) 전달",
+              "계약 경계: None 명시 전달하여 기본(now) 경로 검증",
+              "회귀 광역 탐색: None/naive datetime(2024년 전역)에서 원본과 수정본 동치 property_attack 수행"
             ],
             "findings": 2,
             "verified": 2,
@@ -196,13 +211,14 @@
           {
             "angle": "callers",
             "label": "호출부 경로",
-            "summary": "호출부 경로 관점에서 코드를 검토한 결과, settle_order는 created_at 문자열을 strptime으로 파싱해 calc_due_date에 전달하므로(통상 naive UTC), 수정 전후 동작 차이가 발생할 가능성이 낮습니다. 과거 기록상 tz-aware 입력에 대한 회귀 가능성은 있으나, 이번 관점(호출 경로)에서는 해당 형태의 입력이 유입되는지 확인·재현하지 못했고, 도구 실행 한도 초과로 run_diff/property 검증을 수행하지 못했습니다. 따라서 이번 라운드에서는 확정된 발견이 없습니다.",
+            "summary": "이번 라운드는 호출부 경로 관점으로 공격했다. settle_order는 created_at을 naive datetime으로 파싱해 calc_due_date에 전달하므로, 과거에 보고된 tz-aware 입력 회귀는 이 호출 경로로는 재현되지 않는다. 호출부를 통해 경계(UTC 15시 전후)와 월말 케이스를 검증하려 했으나, 인메모리 DB 스키마 제약으로 settle_order가 order_items 필수 컬럼 오류로 원본/수정본 모두 동일하게 실패하여 calc_due_date까지 도달하지 못했다. 따라서 호출부 경로 기준으로는 수정 미달/회귀 모두 확인된 바 없다. 후속으로는 order_items 테이블의 필수 컬럼을 모두 채운 테스트 데이터를 준비해 동일 케이스(월말 14:59:59/15:00:00, 다양한 월/대형값)를 재실행해 확인하는 것을 제안한다.",
             "attempts": [
-              "과거 성공 사례 조회: tz-aware datetime 입력 시 기존 구현은 예외, 수정본은 예외 미발생(회귀 가능성) 기록을 확인",
-              "호출부 분석: settlement.settle_order가 calc_due_date를 호출하며 created_at을 datetime.strptime(...)로 파싱해 전달함을 확인(일반적으로 naive UTC가 전달될 가능성 높음)",
-              "보조 로직 확인: date_utils.add_business_days 동작(월말 다음날부터 영업일 N일 계산) 검토",
-              "미달 검증 설계(호출 경로): settle_order를 통해 created_at 경계값(UTC 14:59:59, 15:00:00, 말일/초일) 사례를 만들어 run_diff로 원본/수정본 및 기대치 비교 예정이었으나 실행 불가",
-              "회귀 검증 설계(호출 경로): 결함 조건이 성립하지 않는 일반 주문들에 대해 property 기반으로 넓게 비교 계획이었으나 실행 불가"
+              "과거 성공 공격 검토: calc_due_date에 tz-aware datetime 입력 시 예외 유지 회귀 사례 2건 확인(직접 호출 케이스).",
+              "호출부 코드 확인: settle_order가 created_at 문자열을 datetime.strptime로 파싱해 calc_due_date에 전달하므로 tz-aware 입력 경로는 호출부를 통해 도달 불가.",
+              "미달 경계 공격 설계: 월말 경계(KST 기준) 검증을 위해 settle_order 호출로 created_at을 2024-06-30 14:59:59 등으로 설정해 실행 시도.",
+              "run_diff 1차 실행: 최소 컬럼으로 order_items 행 삽입했으나 스키마 불일치로 \"table order_items has no column named sku\" 에러(원본/수정본 동일 실패).",
+              "run_diff 2차 실행: sku 제거 등 스키마 조정 후 재시도했으나 \"NOT NULL constraint failed: order_items.product_name\" 에러(원본/수정본 동일 실패).",
+              "도구 호출 한도 도달로 추가 케이스 실행 불가."
             ],
             "findings": 0,
             "verified": 0,
@@ -214,6 +230,12 @@
       "judge": {
         "passed": false,
         "checks": [
+          {
+            "name": "intake_accepted",
+            "passed": true,
+            "detail": "증상: 정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거하고, 팀 코딩 표준에 맞게 정리해 주세요.",
+            "data": {}
+          },
           {
             "name": "behavior_preserved",
             "passed": true,
@@ -227,7 +249,7 @@
           {
             "name": "attack_findings_rechecked",
             "passed": false,
-            "detail": "공격 입력 2개 중 원본과 다름 2개. 예(회귀): settlement.calc_due_date([{\"$datetime\": \"2024-03-31T10:00:00+00:00\"}]) → 수정본 {\"ok\": true, \"value\": {\"$date\": \"2024-04-05\"}}, 원본 {\"ok\": false, \"exception\": \"ValueError: Not naive datetime (tzinfo is already set)\"}",
+            "detail": "공격 입력 2개 중 원본과 다름 2개. 예(회귀): settlement.calc_due_date([{\"$datetime\": \"2024-03-31T10:00:00+00:00\"}]) → 수정본 {\"ok\": false, \"exception\": \"ValueError: Not naive datetime (must be naive)\"}, 원본 {\"ok\": false, \"exception\": \"ValueError: Not naive datetime (tzinfo is already set)\"}",
             "data": {
               "inputs": 2,
               "mismatches": 2,
@@ -244,10 +266,8 @@
                   ],
                   "kind": "regression",
                   "patched": {
-                    "ok": true,
-                    "value": {
-                      "$date": "2024-04-05"
-                    }
+                    "ok": false,
+                    "exception": "ValueError: Not naive datetime (must be naive)"
                   },
                   "original": {
                     "ok": false,
@@ -257,26 +277,22 @@
                 {
                   "method": "settlement.calc_due_date",
                   "input": [
-                    {
-                      "$datetime": "2024-10-27T00:30:00+01:00"
-                    }
+                    ""
                   ],
                   "kind": "regression",
                   "patched": {
-                    "ok": true,
-                    "value": {
-                      "$date": "2024-11-07"
-                    }
+                    "ok": false,
+                    "exception": "TypeError: str.replace() takes no keyword arguments"
                   },
                   "original": {
                     "ok": false,
-                    "exception": "ValueError: Not naive datetime (tzinfo is already set)"
+                    "exception": "AttributeError: 'str' object has no attribute 'tzinfo'"
                   }
                 }
               ],
               "failed_keys": [
                 "settlement.calc_due_date [{\"$datetime\": \"2024-03-31T10:00:00+00:00\"}]",
-                "settlement.calc_due_date [{\"$datetime\": \"2024-10-27T00:30:00+01:00\"}]"
+                "settlement.calc_due_date [\"\"]"
               ]
             }
           },
@@ -319,68 +335,63 @@
       "number": 2,
       "fix": {
         "method": "settlement.calc_due_date",
-        "patch_summary": "표준화 대상으로 지정된 datetime.utcnow()와 pytz 사용을 제거하면서 동작은 완전히 동일하게 유지하도록 수정했습니다. 구체적으로 1) utcnow() 대신 DEP-DT-01에 따라 datetime.now(timezone.utc)로 현재 시각을 구한 뒤 naive로 맞춰 기존 naive UTC 전제를 유지했습니다. 2) pytz.localize/astimezone 대신 zoneinfo.ZoneInfo와 datetime.timezone.utc를 사용해 시간대 변환을 수행했습니다(DEP-TZ-02). 3) 원본이 pytz.utc.localize(order_dt)에서 tz-aware 입력에 대해 ValueError(\"Not naive datetime (tzinfo is already set)\")를 발생시키던 동작을 보존하기 위해 tz-aware 입력을 명시적으로 감지해 동일한 메시지로 예외를 발생시키도록 했습니다. 이로써 이전 시도의 회귀(attack_findings_rechecked: tz-aware 입력에서 결과 반환)를 해소했습니다. 업무 규칙(BIZ-SET-01, BIZ-TIM-01)에 따른 한국 시간 기준 월말 마감 후 영업일 5일 계산 로직은 그대로 유지했습니다.",
+        "patch_summary": "코드 표준화(시간대/시간 API 교체)를 유지하되, 이전 시도에서 발생한 회귀(예외 종류·메시지 변경)를 원복했습니다. 구체적으로 tz-aware datetime 입력 시 pytz.utc.localize가 내던 예외 메시지와 동일하게 하기 위해 메시지를 \"Not naive datetime (tzinfo is already set)\"로 맞추고, 잘못된 타입(str 등) 입력에서 원본과 동일하게 AttributeError('... has no attribute tzinfo')가 발생하도록 getattr 대신 order_dt.tzinfo에 직접 접근하도록 수정했습니다. 이로써 동작(정상 경로·에러 경로) 모두 원본과 한 글자도 달라지지 않게 복원되었습니다. 표준화 자체는 이전 변경분을 유지하여 pytz 제거와 zoneinfo 사용(DEP-TZ-01, DEP-TZ-02), datetime.utcnow() 제거 후 datetime.now(timezone.utc) 사용(DEP-DT-01), 타입 힌트 유지(STY-01)를 충족합니다. 업무 규칙상 한국 시간으로 월말을 판단하고 5영업일을 더하는 로직은 그대로 보존되어 BIZ-SET-01, BIZ-TIM-01을 준수합니다.",
         "rule_ids": [
-          "DEP-DT-01",
-          "DEP-TZ-02",
           "BIZ-SET-01",
-          "BIZ-TIM-01"
+          "BIZ-TIM-01",
+          "DEP-TZ-01",
+          "DEP-TZ-02",
+          "DEP-DT-01",
+          "STY-01"
         ],
         "history_ids": []
       },
-      "diff": "--- a/src/order_settlement/settlement.py\n+++ b/src/order_settlement/settlement.py\n@@ -4,7 +4,10 @@\n from typing import Tuple\n \n-import pytz\n \n from order_settlement import config, coupon, customer_dao, date_utils, db, discount, order, payment\n+from datetime import timezone\n+from zoneinfo import ZoneInfo\n+from datetime import timezone\n+from zoneinfo import ZoneInfo\n \n \n@@ -26,5 +29,5 @@\n \n \n-def calc_due_date(order_dt=None):\n+def calc_due_date(order_dt: datetime | None = None) -> date:\n     \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n \n@@ -32,7 +35,11 @@\n     \"\"\"\n     if order_dt is None:\n-        order_dt = datetime.utcnow()\n-    kst = pytz.timezone(config.TIMEZONE_NAME)\n-    local = pytz.utc.localize(order_dt).astimezone(kst)\n+        # utcnow() 대신 now(timezone.utc) 사용 후 naive로 맞춘다 (동작 동일)\n+        order_dt = datetime.now(timezone.utc).replace(tzinfo=None)\n+    # 원본(pytz.utc.localize) 동작과 동일하게 tz-aware 입력 시 예외를 발생시킨다.\n+    if order_dt.tzinfo is not None:\n+        raise ValueError(\"Not naive datetime (tzinfo is already set)\")\n+    tz = ZoneInfo(config.TIMEZONE_NAME)\n+    local = order_dt.replace(tzinfo=timezone.utc).astimezone(tz)\n     month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n     return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)\n",
+      "diff": "--- a/src/order_settlement/settlement.py\n+++ b/src/order_settlement/settlement.py\n@@ -4,7 +4,8 @@\n from typing import Tuple\n \n-import pytz\n \n from order_settlement import config, coupon, customer_dao, date_utils, db, discount, order, payment\n+from datetime import timezone\n+from zoneinfo import ZoneInfo\n \n \n@@ -26,5 +27,5 @@\n \n \n-def calc_due_date(order_dt=None):\n+def calc_due_date(order_dt: datetime | None = None) -> date:\n     \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n \n@@ -32,7 +33,14 @@\n     \"\"\"\n     if order_dt is None:\n-        order_dt = datetime.utcnow()\n-    kst = pytz.timezone(config.TIMEZONE_NAME)\n-    local = pytz.utc.localize(order_dt).astimezone(kst)\n+        # aware UTC now (DEP-DT-01)\n+        _utc = datetime.now(timezone.utc)\n+    else:\n+        # pytz.utc.localize와 동일한 예외/메시지를 유지하기 위해 직접 tzinfo에 접근한다.\n+        # tz-aware 입력이면 동일한 메시지로 ValueError를 발생시킨다.\n+        if order_dt.tzinfo is not None and order_dt.tzinfo.utcoffset(order_dt) is not None:\n+            raise ValueError(\"Not naive datetime (tzinfo is already set)\")\n+        _utc = order_dt.replace(tzinfo=timezone.utc)\n+    kst = ZoneInfo(config.TIMEZONE_NAME)\n+    local = _utc.astimezone(kst)\n     month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n     return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)\n",
+      "before_code": "def calc_due_date(order_dt=None):\n    \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n\n    order_dt: UTC naive datetime. 없으면 현재 시각.\n    \"\"\"\n    if order_dt is None:\n        order_dt = datetime.utcnow()\n    kst = pytz.timezone(config.TIMEZONE_NAME)\n    local = pytz.utc.localize(order_dt).astimezone(kst)\n    month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n    return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)",
+      "after_code": "def calc_due_date(order_dt: datetime | None = None) -> date:\n    \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n\n    order_dt: UTC naive datetime. 없으면 현재 시각.\n    \"\"\"\n    if order_dt is None:\n        # aware UTC now (DEP-DT-01)\n        _utc = datetime.now(timezone.utc)\n    else:\n        # pytz.utc.localize와 동일한 예외/메시지를 유지하기 위해 직접 tzinfo에 접근한다.\n        # tz-aware 입력이면 동일한 메시지로 ValueError를 발생시킨다.\n        if order_dt.tzinfo is not None and order_dt.tzinfo.utcoffset(order_dt) is not None:\n            raise ValueError(\"Not naive datetime (tzinfo is already set)\")\n        _utc = order_dt.replace(tzinfo=timezone.utc)\n    kst = ZoneInfo(config.TIMEZONE_NAME)\n    local = _utc.astimezone(kst)\n    month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n    return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)",
       "attack": {
-        "summary": "[경계값] 경계값(UTC 15시 경계)과 tz-aware 입력, 그리고 2024년 전 범위 naive UTC에 대한 비교에서 원본과 수정본의 동작이 동일했습니다. 과거 보고된 tz-aware 회귀도 해소되었으며, 표준화로 인한 미달/회귀는 확인되지 않았습니다.\n[타입·빈 값] 표준화 패치 후 동작은 원본과 동일하게 유지됨을 확인했습니다. 특히 과거 회귀였던 tz-aware datetime 입력에서의 예외 동작(같은 메시지의 ValueError)이 원본과 일치합니다. 타입·빈 값·극단값 등 가장자리 입력에서도 원본과 수정본의 결과가 모두 동일하여 수정 미달이나 회귀를 발견하지 못했습니다.\n[호출부 경로] 호출부 경로 관점에서 코드를 점검한 결과, 수정본은 utcnow() 제거와 pytz 대체를 표준에 맞게 적용했고, tz-aware 입력에서의 예외 메시지도 원본과 동일하게 보존한 것으로 보입니다. 다만 도구 호출 상한으로 인해 settle_order를 통한 실제 실행 비교(run_diff/property_attack)를 수행하지 못해 차이를 확인하지 못했습니다. 현재까지는 확인된 수정 미달 또는 회귀 증거가 없습니다. 경계 시각(UTC 14:59/15:00), 월말·주말·공휴일, tz-aware created_at 등의 입력으로 settle_order를 통해 원본/수정본을 비교 실행해 최종 확인할 것을 제안합니다.\n[조합·순서] 수정본은 원본과 동작이 동일하며, 표준화 규칙 적용으로 인한 회귀나 미달을 발견하지 못했다. tz-aware 예외 동작도 원본과 일치한다.\n[성질 기반] 표준화 패치 이후 원본과 수정본의 결과가 넓은 입력(경계 포함)에서 모두 일치했고, 과거 회귀 건(tz-aware 입력)도 코드상 방어가 추가된 것을 확인했습니다. 본 라운드 관점(성질 기반)에서 확인된 수정 미달/회귀는 없습니다.",
+        "summary": "[경계값] 경계값 관점에서 원본과 수정본의 동작 차이를 찾지 못했습니다. tz-aware 입력 시 예외 종류·메시지, 잘못된 타입(str) 입력 시 예외, 그리고 월말 경계(UTC 15시) 주변의 정상 계산 모두 원본과 동일합니다. property_attack으로 넓은 입력을 비교해도 차이가 발견되지 않았습니다.\n[타입·빈 값] 이번 라운드(타입·빈 값)에서 확인한 모든 경계/이상 타입 입력에 대해 수정본은 원본과 동작·예외 종류/메시지가 동일했습니다. 과거에 보고된 tz-aware 입력의 회귀도 메시지까지 원복된 것이 확인되었습니다. 업무 규칙(BIZ-SET-01, BIZ-TIM-01) 관련 미달 사례는 본 관점(타입 공격) 범위에서 발견되지 않았고, 결함 영역 밖 광범위 비교에서도 차이를 발견하지 못했습니다.\n[조합·순서] 표준화 패치 후, 과거 회귀로 보고된 예외 종류·메시지 변경이 모두 복원되었고(aware/str 입력), 업무 규칙 경계(UTC 15시 경계, 월말 주말 포함)에서도 원본과 동일 동작을 확인했습니다. 이번 관점(조합·순서)에 따른 다양한 조합 입력으로도 차이를 재현하지 못해, 수정 미달/회귀 모두 발견되지 않았습니다.",
         "attempts": [
-          "[경계값] attack_memory에서 과거 회귀 사례( tz-aware 입력에서 예외 대신 날짜 반환 )를 확인하고 동일 유형 입력을 우선 시도하기로 함",
-          "[경계값] read_method로 settlement.calc_due_date와 호출자(settlement.settle_order)를 읽어 표준화 변경점과 입력 전제를 확인함(naive UTC, tz-aware는 예외)",
-          "[경계값] 경계값(UTC 15:00 전/정각/후)에서 2024-01-31, 2024-02-29에 대해 run_diff 실행: 원본과 수정본 결과 동일 확인",
-          "[경계값] tz-aware 입력(UTC, +01:00)에서 run_diff로 예외 메시지까지 동일(ValueError: Not naive datetime (tzinfo is already set)) 확인",
-          "[경계값] property_attack로 2024년 내 다양한 naive UTC datetime(경계 샘플 + 랜덤) 200건 비교: 불일치 0건 확인",
-          "[타입·빈 값] 공격 메모리의 tz-aware 입력 회귀 사례 재현 시도(+00:00, +01:00 오프셋) — 두 버전 모두 동일한 ValueError 발생 확인",
-          "[타입·빈 값] 인자 미지정(None) 기본값 동작 비교 — 두 버전 동일 날짜 반환",
-          "[타입·빈 값] 빈 문자열 입력(\"\") — 두 버전 모두 동일한 AttributeError",
-          "[타입·빈 값] 빈 리스트 입력([]) — 두 버전 모두 동일한 AttributeError",
-          "[타입·빈 값] 음수 정수(-1) — 두 버전 모두 동일한 AttributeError",
-          "[타입·빈 값] 매우 큰 정수(10^12) — 두 버전 모두 동일한 AttributeError",
-          "[타입·빈 값] 극단 시각(9999-12-31T12:00:00) — 두 버전 모두 OverflowError 동일",
-          "[타입·빈 값] 월말 인접 정상 naive 시각(2024-03-31T14:00:00) — 두 버전 동일 날짜 반환",
-          "[타입·빈 값] property_attack: None/naive datetime/aware datetime 샘플/정수/문자열/리스트/딕셔너리 혼합 광범위 입력 200건 — 불일치 0건",
-          "[호출부 경로] 호출자 탐색으로 settle_order를 확인하여 calc_due_date의 실제 호출 경로를 파악함",
-          "[호출부 경로] settle_order 코드에서 created_at을 datetime.strptime로 파싱해 naive UTC로 calc_due_date에 전달되는 흐름을 검토함",
-          "[호출부 경로] calc_due_date 수정본을 읽고 naive/aware 입력 처리(aware 입력 시 ValueError 재현), UTC→KST 변환(ZoneInfo), 기본값(now(timezone.utc)→naive) 유지 여부를 점검함",
-          "[호출부 경로] date_utils.add_business_days와 last_day_of_month를 읽어 월말 다음날부터 영업일 5일 계산 로직(BIZ-SET-01) 일치 여부를 확인함",
-          "[호출부 경로] 경계값 시나리오(UTC 14:59/15:00, 월말, 주말/공휴일, tz-aware created_at)로 settle_order를 통해 run_diff를 실행하려 했으나 도구 호출 상한으로 미실행",
-          "[호출부 경로] 결함 영역 밖에서의 회귀 여부를 property_attack으로 확인하려 했으나 도구 호출 상한으로 미실행",
-          "[조합·순서] 공격 메모리 재현: tz-aware 입력(UTC/비UTC 혼합)에서 원본은 ValueError, 수정본도 동일 예외 발생 확인.",
-          "[조합·순서] 경계 조합: 2024-03-31의 14:59:59/15:00:00(UTC)로 한국 시간 월 경계 전후를 시험, 동일 결과 확인.",
-          "[조합·순서] 윤년 말 조합: 2024-02-29의 14:59:59/15:00:00(UTC)로 월 경계 전후를 시험, 동일 결과 확인.",
-          "[조합·순서] 연말 경계 조합: 2023-12-31의 14:59:59/15:00:00(UTC)로 연말→연초 경계 전후 시험, 동일 결과 확인.",
-          "[조합·순서] 형 혼합: date 객체(2024-03-15) 입력 시 예외 유형/메시지 동일 확인.",
-          "[조합·순서] 과거 DST 존재 연도 혼합: 1988-05-07/1988-10-08 주변 시각(UTC) 샘플을 포함해 역사적 오프셋 차이 가능성 점검, 동일 결과 확인.",
-          "[조합·순서] 광역 회귀 탐색(property_attack): 1950–1990, 2023–2025 구간의 naive datetime 랜덤과 경계 샘플, tz-aware 샘플, date 샘플을 one_of로 섞어 200건 비교, 차이 없음.",
-          "[성질 기반] attack_memory로 과거 동일 함수의 회귀 성공 사례 확인: tz-aware 입력에서 원본은 ValueError, 이전 수정본은 날짜 반환(회귀) 기록 존재",
-          "[성질 기반] read_method로 settlement.calc_due_date 소스 확인: datetime.now(timezone.utc)→naive 유지, ZoneInfo로 변환, tz-aware 입력 시 ValueError 재현 로직 추가 확인. get_callers로 settle_order에서 호출됨을 확인",
-          "[성질 기반] 경계값 run_diff: 2024-01-31 14:59:59/15:00:00(UTC 15시 한국 날짜 경계), 2024-02-29 14:59:59/15:00:00(윤년 2월 말), 2024-03-31 14:59:59/15:00:00, 2024-12-31 14:59:59/15:00:00 입력 비교 — 원본/수정본 결과 동일",
-          "[성질 기반] 추가 run_diff: 1970-01-01 00:00:00, 2030-06-15 12:34:56 등 극단/일반 값 비교 — 원본/수정본 결과 동일",
-          "[성질 기반] property_attack: 2024년 전체 범위 naive UTC datetime + 월말/UTC15시 경계 샘플 혼합으로 200건 비교 — 불일치 0건",
-          "[성질 기반] tz-aware 입력 회귀 재현 시도는 테스트 입력 스키마에서 tz정보를 표기하는 방법 부재로 생략"
+          "[경계값] 과거 회귀 사례(tz-aware 입력 2건, 잘못된 타입 str 1건)를 우선 재현 시도",
+          "[경계값] 경계 시각(UTC 15시 경계) 바로 아래/같은 값에 대한 naive UTC 입력: 2024-03-31 14:59/15:00, 2024-02-29 14:59/15:00 실행",
+          "[경계값] DST 경계가 있는 tz-aware 입력(2024-10-27T00:30:00+01:00) 확인",
+          "[경계값] 무작위 2024년 naive datetime, 일부 tz-aware, 잘못된 타입(빈 문자열, 정수) 혼합하여 property_attack 실행",
+          "[타입·빈 값] 과거 회귀 재검증: tz-aware 입력 2024-03-31T10:00:00+00:00 → 원본/수정본 모두 ValueError('Not naive datetime (tzinfo is already set)')",
+          "[타입·빈 값] 과거 회귀 재검증: tz-aware 입력 2024-10-27T00:30:00+01:00(DST 경계) → 원본/수정본 모두 동일 ValueError",
+          "[타입·빈 값] 빈 문자열 '' → 원본/수정본 모두 AttributeError: 'str' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 공백 문자열 '   ' → 원본/수정본 모두 AttributeError: 'str' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 특수문자 문자열 ''\"!@#$ → 원본/수정본 모두 AttributeError: 'str' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 빈 리스트 [] → 원본/수정본 모두 AttributeError: 'list' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 음수 정수 -1 → 원본/수정본 모두 AttributeError: 'int' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 아주 큰 정수 10**36 → 원본/수정본 모두 AttributeError: 'int' object has no attribute 'tzinfo'",
+          "[타입·빈 값] date 객체 2024-03-31 → 원본/수정본 모두 AttributeError: 'datetime.date' object has no attribute 'tzinfo'",
+          "[타입·빈 값] naive datetime 2024-03-31T10:00:00 → 원본/수정본 동일 결과(2024-04-05)",
+          "[타입·빈 값] None → 현재 시각 기준 계산, 원본/수정본 동일 날짜 반환",
+          "[타입·빈 값] 불리언 True/False → 원본/수정본 모두 AttributeError: 'bool' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 빈 dict {} → 원본/수정본 모두 AttributeError: 'dict' object has no attribute 'tzinfo'",
+          "[타입·빈 값] 넓은 타입 도메인 무작위 비교(200예)에서도 원본/수정본 불일치 0건",
+          "[조합·순서] attack_memory의 과거 회귀 사례 입력(UTC aware, DST 지역 aware, 잘못된 타입 str)을 우선 재시도",
+          "[조합·순서] UTC aware 입력 2024-03-31T10:00:00+00:00 → 원본/수정본 모두 동일 예외(ValueError: Not naive datetime (tzinfo is already set)) 확인",
+          "[조합·순서] DST 지역 aware 입력 2024-10-27T00:30:00+01:00 → 원본/수정본 동일 예외 확인",
+          "[조합·순서] 잘못된 타입(str) 입력 \"\" → 원본/수정본 동일 예외(AttributeError: 'str' object has no attribute 'tzinfo') 확인",
+          "[조합·순서] 경계값 조합(월말 직전/직후, UTC 15시 경계): 2024-06-30 14:59:59, 15:00:00, 15:00:01(naive UTC) 각각 실행 → 원본/수정본 동일 날짜 반환 확인; BIZ-SET-01에 따라 기대값(07-05, 08-07)과도 부합",
+          "[조합·순서] 다른 월말(토요일) 조합: 2024-08-31 14:00:00, 15:00:00 → 원본/수정본 동일 날짜 반환 확인",
+          "[조합·순서] property_attack: 2024년 내 임의 naive datetime + 샘플(경계/aware/비정상 타입 혼합) 200건 비교 → 불일치 0건"
         ],
         "findings": [],
         "saved_to_memory": 0,
         "error": null,
-        "planned_rounds": 5,
+        "planned_rounds": 3,
         "rounds": [
           {
             "angle": "boundary",
             "label": "경계값",
-            "summary": "경계값(UTC 15시 경계)과 tz-aware 입력, 그리고 2024년 전 범위 naive UTC에 대한 비교에서 원본과 수정본의 동작이 동일했습니다. 과거 보고된 tz-aware 회귀도 해소되었으며, 표준화로 인한 미달/회귀는 확인되지 않았습니다.",
+            "summary": "경계값 관점에서 원본과 수정본의 동작 차이를 찾지 못했습니다. tz-aware 입력 시 예외 종류·메시지, 잘못된 타입(str) 입력 시 예외, 그리고 월말 경계(UTC 15시) 주변의 정상 계산 모두 원본과 동일합니다. property_attack으로 넓은 입력을 비교해도 차이가 발견되지 않았습니다.",
             "attempts": [
-              "attack_memory에서 과거 회귀 사례( tz-aware 입력에서 예외 대신 날짜 반환 )를 확인하고 동일 유형 입력을 우선 시도하기로 함",
-              "read_method로 settlement.calc_due_date와 호출자(settlement.settle_order)를 읽어 표준화 변경점과 입력 전제를 확인함(naive UTC, tz-aware는 예외)",
-              "경계값(UTC 15:00 전/정각/후)에서 2024-01-31, 2024-02-29에 대해 run_diff 실행: 원본과 수정본 결과 동일 확인",
-              "tz-aware 입력(UTC, +01:00)에서 run_diff로 예외 메시지까지 동일(ValueError: Not naive datetime (tzinfo is already set)) 확인",
-              "property_attack로 2024년 내 다양한 naive UTC datetime(경계 샘플 + 랜덤) 200건 비교: 불일치 0건 확인"
+              "과거 회귀 사례(tz-aware 입력 2건, 잘못된 타입 str 1건)를 우선 재현 시도",
+              "경계 시각(UTC 15시 경계) 바로 아래/같은 값에 대한 naive UTC 입력: 2024-03-31 14:59/15:00, 2024-02-29 14:59/15:00 실행",
+              "DST 경계가 있는 tz-aware 입력(2024-10-27T00:30:00+01:00) 확인",
+              "무작위 2024년 naive datetime, 일부 tz-aware, 잘못된 타입(빈 문자열, 정수) 혼합하여 property_attack 실행"
             ],
             "findings": 0,
             "verified": 0,
@@ -389,33 +400,22 @@
           {
             "angle": "types",
             "label": "타입·빈 값",
-            "summary": "표준화 패치 후 동작은 원본과 동일하게 유지됨을 확인했습니다. 특히 과거 회귀였던 tz-aware datetime 입력에서의 예외 동작(같은 메시지의 ValueError)이 원본과 일치합니다. 타입·빈 값·극단값 등 가장자리 입력에서도 원본과 수정본의 결과가 모두 동일하여 수정 미달이나 회귀를 발견하지 못했습니다.",
+            "summary": "이번 라운드(타입·빈 값)에서 확인한 모든 경계/이상 타입 입력에 대해 수정본은 원본과 동작·예외 종류/메시지가 동일했습니다. 과거에 보고된 tz-aware 입력의 회귀도 메시지까지 원복된 것이 확인되었습니다. 업무 규칙(BIZ-SET-01, BIZ-TIM-01) 관련 미달 사례는 본 관점(타입 공격) 범위에서 발견되지 않았고, 결함 영역 밖 광범위 비교에서도 차이를 발견하지 못했습니다.",
             "attempts": [
-              "공격 메모리의 tz-aware 입력 회귀 사례 재현 시도(+00:00, +01:00 오프셋) — 두 버전 모두 동일한 ValueError 발생 확인",
-              "인자 미지정(None) 기본값 동작 비교 — 두 버전 동일 날짜 반환",
-              "빈 문자열 입력(\"\") — 두 버전 모두 동일한 AttributeError",
-              "빈 리스트 입력([]) — 두 버전 모두 동일한 AttributeError",
-              "음수 정수(-1) — 두 버전 모두 동일한 AttributeError",
-              "매우 큰 정수(10^12) — 두 버전 모두 동일한 AttributeError",
-              "극단 시각(9999-12-31T12:00:00) — 두 버전 모두 OverflowError 동일",
-              "월말 인접 정상 naive 시각(2024-03-31T14:00:00) — 두 버전 동일 날짜 반환",
-              "property_attack: None/naive datetime/aware datetime 샘플/정수/문자열/리스트/딕셔너리 혼합 광범위 입력 200건 — 불일치 0건"
-            ],
-            "findings": 0,
-            "verified": 0,
-            "error": null
-          },
-          {
-            "angle": "callers",
-            "label": "호출부 경로",
-            "summary": "호출부 경로 관점에서 코드를 점검한 결과, 수정본은 utcnow() 제거와 pytz 대체를 표준에 맞게 적용했고, tz-aware 입력에서의 예외 메시지도 원본과 동일하게 보존한 것으로 보입니다. 다만 도구 호출 상한으로 인해 settle_order를 통한 실제 실행 비교(run_diff/property_attack)를 수행하지 못해 차이를 확인하지 못했습니다. 현재까지는 확인된 수정 미달 또는 회귀 증거가 없습니다. 경계 시각(UTC 14:59/15:00), 월말·주말·공휴일, tz-aware created_at 등의 입력으로 settle_order를 통해 원본/수정본을 비교 실행해 최종 확인할 것을 제안합니다.",
-            "attempts": [
-              "호출자 탐색으로 settle_order를 확인하여 calc_due_date의 실제 호출 경로를 파악함",
-              "settle_order 코드에서 created_at을 datetime.strptime로 파싱해 naive UTC로 calc_due_date에 전달되는 흐름을 검토함",
-              "calc_due_date 수정본을 읽고 naive/aware 입력 처리(aware 입력 시 ValueError 재현), UTC→KST 변환(ZoneInfo), 기본값(now(timezone.utc)→naive) 유지 여부를 점검함",
-              "date_utils.add_business_days와 last_day_of_month를 읽어 월말 다음날부터 영업일 5일 계산 로직(BIZ-SET-01) 일치 여부를 확인함",
-              "경계값 시나리오(UTC 14:59/15:00, 월말, 주말/공휴일, tz-aware created_at)로 settle_order를 통해 run_diff를 실행하려 했으나 도구 호출 상한으로 미실행",
-              "결함 영역 밖에서의 회귀 여부를 property_attack으로 확인하려 했으나 도구 호출 상한으로 미실행"
+              "과거 회귀 재검증: tz-aware 입력 2024-03-31T10:00:00+00:00 → 원본/수정본 모두 ValueError('Not naive datetime (tzinfo is already set)')",
+              "과거 회귀 재검증: tz-aware 입력 2024-10-27T00:30:00+01:00(DST 경계) → 원본/수정본 모두 동일 ValueError",
+              "빈 문자열 '' → 원본/수정본 모두 AttributeError: 'str' object has no attribute 'tzinfo'",
+              "공백 문자열 '   ' → 원본/수정본 모두 AttributeError: 'str' object has no attribute 'tzinfo'",
+              "특수문자 문자열 ''\"!@#$ → 원본/수정본 모두 AttributeError: 'str' object has no attribute 'tzinfo'",
+              "빈 리스트 [] → 원본/수정본 모두 AttributeError: 'list' object has no attribute 'tzinfo'",
+              "음수 정수 -1 → 원본/수정본 모두 AttributeError: 'int' object has no attribute 'tzinfo'",
+              "아주 큰 정수 10**36 → 원본/수정본 모두 AttributeError: 'int' object has no attribute 'tzinfo'",
+              "date 객체 2024-03-31 → 원본/수정본 모두 AttributeError: 'datetime.date' object has no attribute 'tzinfo'",
+              "naive datetime 2024-03-31T10:00:00 → 원본/수정본 동일 결과(2024-04-05)",
+              "None → 현재 시각 기준 계산, 원본/수정본 동일 날짜 반환",
+              "불리언 True/False → 원본/수정본 모두 AttributeError: 'bool' object has no attribute 'tzinfo'",
+              "빈 dict {} → 원본/수정본 모두 AttributeError: 'dict' object has no attribute 'tzinfo'",
+              "넓은 타입 도메인 무작위 비교(200예)에서도 원본/수정본 불일치 0건"
             ],
             "findings": 0,
             "verified": 0,
@@ -424,42 +424,32 @@
           {
             "angle": "combination",
             "label": "조합·순서",
-            "summary": "수정본은 원본과 동작이 동일하며, 표준화 규칙 적용으로 인한 회귀나 미달을 발견하지 못했다. tz-aware 예외 동작도 원본과 일치한다.",
+            "summary": "표준화 패치 후, 과거 회귀로 보고된 예외 종류·메시지 변경이 모두 복원되었고(aware/str 입력), 업무 규칙 경계(UTC 15시 경계, 월말 주말 포함)에서도 원본과 동일 동작을 확인했습니다. 이번 관점(조합·순서)에 따른 다양한 조합 입력으로도 차이를 재현하지 못해, 수정 미달/회귀 모두 발견되지 않았습니다.",
             "attempts": [
-              "공격 메모리 재현: tz-aware 입력(UTC/비UTC 혼합)에서 원본은 ValueError, 수정본도 동일 예외 발생 확인.",
-              "경계 조합: 2024-03-31의 14:59:59/15:00:00(UTC)로 한국 시간 월 경계 전후를 시험, 동일 결과 확인.",
-              "윤년 말 조합: 2024-02-29의 14:59:59/15:00:00(UTC)로 월 경계 전후를 시험, 동일 결과 확인.",
-              "연말 경계 조합: 2023-12-31의 14:59:59/15:00:00(UTC)로 연말→연초 경계 전후 시험, 동일 결과 확인.",
-              "형 혼합: date 객체(2024-03-15) 입력 시 예외 유형/메시지 동일 확인.",
-              "과거 DST 존재 연도 혼합: 1988-05-07/1988-10-08 주변 시각(UTC) 샘플을 포함해 역사적 오프셋 차이 가능성 점검, 동일 결과 확인.",
-              "광역 회귀 탐색(property_attack): 1950–1990, 2023–2025 구간의 naive datetime 랜덤과 경계 샘플, tz-aware 샘플, date 샘플을 one_of로 섞어 200건 비교, 차이 없음."
-            ],
-            "findings": 0,
-            "verified": 0,
-            "error": null
-          },
-          {
-            "angle": "property",
-            "label": "성질 기반",
-            "summary": "표준화 패치 이후 원본과 수정본의 결과가 넓은 입력(경계 포함)에서 모두 일치했고, 과거 회귀 건(tz-aware 입력)도 코드상 방어가 추가된 것을 확인했습니다. 본 라운드 관점(성질 기반)에서 확인된 수정 미달/회귀는 없습니다.",
-            "attempts": [
-              "attack_memory로 과거 동일 함수의 회귀 성공 사례 확인: tz-aware 입력에서 원본은 ValueError, 이전 수정본은 날짜 반환(회귀) 기록 존재",
-              "read_method로 settlement.calc_due_date 소스 확인: datetime.now(timezone.utc)→naive 유지, ZoneInfo로 변환, tz-aware 입력 시 ValueError 재현 로직 추가 확인. get_callers로 settle_order에서 호출됨을 확인",
-              "경계값 run_diff: 2024-01-31 14:59:59/15:00:00(UTC 15시 한국 날짜 경계), 2024-02-29 14:59:59/15:00:00(윤년 2월 말), 2024-03-31 14:59:59/15:00:00, 2024-12-31 14:59:59/15:00:00 입력 비교 — 원본/수정본 결과 동일",
-              "추가 run_diff: 1970-01-01 00:00:00, 2030-06-15 12:34:56 등 극단/일반 값 비교 — 원본/수정본 결과 동일",
-              "property_attack: 2024년 전체 범위 naive UTC datetime + 월말/UTC15시 경계 샘플 혼합으로 200건 비교 — 불일치 0건",
-              "tz-aware 입력 회귀 재현 시도는 테스트 입력 스키마에서 tz정보를 표기하는 방법 부재로 생략"
+              "attack_memory의 과거 회귀 사례 입력(UTC aware, DST 지역 aware, 잘못된 타입 str)을 우선 재시도",
+              "UTC aware 입력 2024-03-31T10:00:00+00:00 → 원본/수정본 모두 동일 예외(ValueError: Not naive datetime (tzinfo is already set)) 확인",
+              "DST 지역 aware 입력 2024-10-27T00:30:00+01:00 → 원본/수정본 동일 예외 확인",
+              "잘못된 타입(str) 입력 \"\" → 원본/수정본 동일 예외(AttributeError: 'str' object has no attribute 'tzinfo') 확인",
+              "경계값 조합(월말 직전/직후, UTC 15시 경계): 2024-06-30 14:59:59, 15:00:00, 15:00:01(naive UTC) 각각 실행 → 원본/수정본 동일 날짜 반환 확인; BIZ-SET-01에 따라 기대값(07-05, 08-07)과도 부합",
+              "다른 월말(토요일) 조합: 2024-08-31 14:00:00, 15:00:00 → 원본/수정본 동일 날짜 반환 확인",
+              "property_attack: 2024년 내 임의 naive datetime + 샘플(경계/aware/비정상 타입 혼합) 200건 비교 → 불일치 0건"
             ],
             "findings": 0,
             "verified": 0,
             "error": null
           }
         ],
-        "escalation": "이전 시도 판정 실패"
+        "escalation": "이전 시도 판정 실패 → 문제를 찾았던 관점(경계값·타입·빈 값) + 새 관점(조합·순서)"
       },
       "judge": {
         "passed": true,
         "checks": [
+          {
+            "name": "intake_accepted",
+            "passed": true,
+            "detail": "증상: 정산 마감일 계산의 datetime.utcnow()·pytz 사용을 제거하고, 팀 코딩 표준에 맞게 정리해 주세요.",
+            "data": {}
+          },
           {
             "name": "behavior_preserved",
             "passed": true,
@@ -472,9 +462,17 @@
           },
           {
             "name": "attack_findings_rechecked",
-            "passed": null,
-            "detail": "공격이 제안한 입력 없음",
-            "data": {}
+            "passed": true,
+            "detail": "공격 입력 2개 중 원본과 다름 0개",
+            "data": {
+              "inputs": 2,
+              "mismatches": 0,
+              "under_fix": 0,
+              "regression": 0,
+              "skipped": 0,
+              "failed_inputs": [],
+              "failed_keys": []
+            }
           },
           {
             "name": "deprecated_zero",
@@ -514,9 +512,10 @@
   ],
   "human_review_reason": null,
   "decision": null,
-  "tokens_used": 655736,
+  "answer_check": null,
+  "tokens_used": 785409,
   "run_ids": [
-    "SR-2077-20261021-104313"
+    "SR-2077-20261022-150656"
   ],
-  "updated_at": "2026-10-21T10:53:48"
+  "updated_at": "2026-10-22T15:15:33"
 }
