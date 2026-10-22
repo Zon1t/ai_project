@@ -166,12 +166,13 @@ def _replay_app(dirs, state: TicketState) -> AppTest:
 def test_app_replay_renders_and_approves(dirs):
     at = _replay_app(dirs, _state())
     assert at.main.header[0].value.startswith("SR-2041")
-    assert len(at.tabs) == 4 and [t.label.split(": ")[-1] for t in at.tabs] == ["결함 위치", "근거", "패치 diff",
-                                                                                 "공격 로그"]
+    assert [t.label.split(": ")[-1] for t in at.tabs] == ["요약", "결함 위치", "근거", "패치 diff", "공격 로그",
+                                                          "판정 조건", "처리 과정"]
     assert any("판정 통과" in s.value for s in at.subheader)
     assert not at.metric  # 결론 카드(판정 조건 수·시간·토큰)는 없애고 한 줄 요약으로
     assert any("재시도 1회 · 공격이" in m.value for m in at.markdown)
-    assert any(e.label.startswith("판정 조건 보기 · 통과") for e in at.expander)  # 통과한 조건은 접어 둔다
+    assert any(not t.value.empty for t in at.table)  # 요약 탭: 항목별 한 줄 표
+    assert not any(e.label.startswith(("판정 조건", "처리 과정")) for e in at.expander)  # 세로로 쌓지 않고 탭으로
     approve = next(b for b in at.button if b.label == "승인 후 반영")
     assert not approve.disabled
     approve.click().run()
@@ -185,20 +186,19 @@ def test_app_approve_disabled_when_judge_failed(dirs):
     approve = next(b for b in at.button if b.label == "승인 후 반영")
     assert approve.disabled
     assert any("사람 검토" in w.value for w in at.warning) is False  # 사유 없는 사람 검토 상태
-    assert any("결과:" in e.value for e in at.error)  # 실패한 판정 조건은 접지 않고 결과와 함께 바로 보인다
+    assert any("실패: " in e.proto.title for e in at.error)  # 실패한 판정 조건은 요약 탭에 바로 보인다
     at.text_area[0].input("정답과 다름").run()
     next(b for b in at.button if b.label == "반려 확정").click().run()
     assert TicketState.load(ui.replay_working_path("SR-2041")).decision.reason == "정답과 다름"
 
 
 def test_app_replay_button_shows_summary_not_raw_log(dirs):
-    """재생 중에는 진행 표시만, 끝나면 처리 과정 요약을 펼친다. 원본 로그는 토글을 켜야 보인다."""
+    """재생 중에는 진행 표시만, 단계별 요약은 처리 과정 탭에. 원본 로그는 토글을 켜야 보인다."""
     at = _replay_app(dirs, _state())
     next(b for b in at.button if "재생" in b.label).click().run()
     assert not at.exception
-    assert not any("결과 정리" in m.value for m in at.markdown)
-    process = next(e for e in at.expander if e.label.startswith("처리 과정"))
-    assert process.proto.expanded
+    assert not any("결과 정리" in c.value for c in at.code)
+    assert any(t.label.endswith("처리 과정") for t in at.tabs) and at.dataframe
     at.toggle(key="raw_log").set_value(True).run()
     assert any("결과 정리" in c.value for c in at.code)
 
@@ -267,7 +267,8 @@ def test_app_guide_dialog_and_unevaluated_notice(dirs):
     attempt.judge.checks.append(JudgeCheck(name="attack_findings_rechecked", passed=None,
                                            detail="정답 구현 없음 — 공격 입력 재판정 미평가"))
     at = _replay_app(dirs, _state(attempts=[attempt]))
-    assert any("자동으로 확인하지 못한 조건 1개" in i.proto.title for i in at.info)
+    assert any("비교할 기준이 없어 확인하지 못했습니다" in i.value for i in at.info)
+    assert any("조건부 통과 (미평가 1개)" in s.value for s in at.subheader)
     next(b for b in at.button if b.label == "사용 설명서").click().run()
     assert not at.exception
     assert any("RedFix가 하는 일" in m.value for m in at.markdown)
@@ -550,3 +551,27 @@ def test_replay_copy_refreshes_after_rerecording(dirs):
     os.utime(dest / config.STATE_FILENAME, (future, future))
     again = ui.load_replay("SR-2041")[0]
     assert again.tokens_used == 777 and again.status == "approval_pending"
+
+
+def test_overview_rows_one_line_per_item():
+    """요약 탭의 표: 결함 위치·수정·근거·공격·판정 조건을 한 줄씩."""
+    state = _state()
+    rows = {r["항목"]: r["내용"] for r in ui.overview_rows(state)}
+    assert set(rows) >= {"결함 위치", "수정", "공격", "판정 조건"}
+    assert rows["결함 위치"].startswith("discount.apply_coupon (모델")
+    assert "시도 2회째 (재시도 1회)" in rows["판정 조건"]
+    assert all("\n" not in v for v in rows.values())
+    assert ui.first_sentence("첫 문장입니다. 둘째 문장입니다.") == "첫 문장입니다."
+    assert ui.first_sentence("가" * 300).endswith("…") and len(ui.first_sentence("가" * 300)) == 140
+
+
+def test_app_needs_info_has_no_decision(dirs):
+    """보완 요청 티켓은 요약 탭에 사유만 보이고 승인·반려 버튼은 없다."""
+    from sr_agent.workflow.state import IntakeResult
+
+    reason = "시스템 수정 요청으로 볼 수 없음"
+    state = TicketState(ticket=TICKET, status="needs_info", human_review_reason=f"접수 보완 요청: {reason}",
+                        intake=IntakeResult(accepted=False, problems=[reason]))
+    at = _replay_app(dirs, state)
+    assert any("보완 요청" in e.proto.title for e in at.error)
+    assert not any(b.label == "승인 후 반영" for b in at.button)

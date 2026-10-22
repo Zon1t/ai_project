@@ -102,6 +102,54 @@ def attack_summary(state: TicketState) -> str:
     return f"공격이 제기한 문제 {proposed}건 → 판정이 다시 실행해 실제 문제 {check.data.get('mismatches', 0)}건"
 
 
+def first_sentence(text: str, limit: int = 140) -> str:
+    """설명 글의 첫 문장 (요약 표용). 너무 길면 자른다."""
+    text = " ".join((text or "").split())
+    for end in ("다. ", ". ", "다.\n"):
+        if end in text:
+            text = text[: text.index(end) + len(end.rstrip())]
+            break
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def overview_rows(state: TicketState) -> list[dict]:
+    """요약 탭의 표: 항목마다 한 줄. 자세한 내용은 각 탭에서 본다."""
+    t, a = state.ticket, state.analysis
+    last = state.attempts[-1] if state.attempts else None
+    rows = []
+    if state.intake is not None:
+        out = state.intake.output
+        quote = f" — 증상 “{first_sentence(out.symptom_quote, 80)}”" if out else ""
+        rows.append({"항목": "접수 검사", "내용": "받아들임" + quote if state.intake.accepted
+                     else "보완 요청: " + "; ".join(state.intake.problems)})
+    if a is not None:
+        rank = f"모델 {a.model_rank}위" if a.model_rank else "모델 Top-3 밖"
+        head = f"{a.final_method} ({rank})" if a.confident else f"{a.final_method} — 확신 불가: {a.blocker}"
+        rows.append({"항목": "결함 위치", "내용": f"{head}. {first_sentence(a.reason)}"})
+    elif t.method:
+        rows.append({"항목": "대상 함수", "내용": f"{t.method} (진단 결과가 알려 준 위치, 분석 생략)"})
+    if last is not None and last.fix is not None:
+        cited = [*last.fix.rule_ids, *last.fix.history_ids]
+        versions = code_versions(state, last)
+        changed = len(changed_line_numbers(versions["before"], versions["after"])) if versions else None
+        rows.append({"항목": "수정", "내용": first_sentence(last.fix.patch_summary)
+                     + (f" (바뀐 줄 {changed}개)" if changed is not None else "")})
+        if cited:
+            rows.append({"항목": "근거", "내용": ", ".join(dict.fromkeys(cited))})
+    if last is not None:
+        rows.append({"항목": "공격", "내용": attack_summary(state)})
+    if last is not None and last.judge is not None:
+        checks = last.judge.checks
+        failed = [CHECK_LABELS.get(c.name, c.name) for c in checks if c.passed is False]
+        pending = [CHECK_LABELS.get(c.name, c.name) for c in checks if c.passed is None]
+        text = f"통과 {sum(c.passed is True for c in checks)}개"
+        text += f" · 실패 {len(failed)}개 ({', '.join(failed)})" if failed else ""
+        text += f" · 미평가 {len(pending)}개 ({', '.join(pending)})" if pending else ""
+        text += f" — 시도 {last.number}회째 (재시도 {len(state.attempts) - 1}회)"
+        rows.append({"항목": "판정 조건", "내용": text})
+    return rows
+
+
 def format_result(result: dict | None) -> str:
     """run_diff 결과 {"ok", "value" | "exception"}를 사람이 읽는 한 줄로."""
     if not result:

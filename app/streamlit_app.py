@@ -188,13 +188,14 @@ def demo_loader() -> None:
             st.rerun()
 
 
-def demo_panel(ticket: Ticket) -> None:
+def demo_panel(ticket: Ticket, expanded: bool = True) -> None:
     """시연 케이스에서 발표자가 확인할 것."""
     try:
         case = demo.find_case(ticket.demo_case)
     except ValueError:
         return
-    with st.expander(f"시연 케이스 {case['case_id']} · {case['label']}", expanded=True, icon=":material/science:"):
+    with st.expander(f"시연 케이스 {case['case_id']} · {case['label']}", expanded=expanded,
+                     icon=":material/science:"):
         st.caption(case["goal"])
         st.markdown("\n".join(f"{i}. {c}" for i, c in enumerate(case["check"], 1)))
 
@@ -252,8 +253,7 @@ def replay_progress(ticket: Ticket, events: list[dict], stage_slot) -> None:
         bar.progress(i / len(shown), text=f":material/autorenew: {label}")
         time.sleep(config.REPLAY_EVENT_DELAY_S)
     bar.empty()
-    st.session_state["show_process"] = True
-    st.toast("재생 완료 — 아래 처리 과정에서 단계별 요약을 볼 수 있습니다.", icon=":material/check:")
+    st.toast("재생 완료 — 처리 과정 탭에서 단계별 요약을 볼 수 있습니다.", icon=":material/check:")
 
 
 def run_controls(row, replay: bool, ticket: Ticket, events: list[dict], stage_slot) -> bool:
@@ -275,7 +275,6 @@ def run_controls(row, replay: bool, ticket: Ticket, events: list[dict], stage_sl
         else:
             st.toast(f"{ticket.ticket_id} 처리 끝: {ui.STATUS_LABELS.get(finished.result, finished.result)}",
                      icon=":material/check:")
-            st.session_state["show_process"] = True
         _jobs().forget(ticket.ticket_id)
     run = row.button("실행", icon=":material/play_arrow:", type="primary")
     restart = row.toggle("처음부터 다시", help="저장된 상태와 작업본을 지우고 처음부터 실행합니다.")
@@ -404,68 +403,82 @@ def intake_notice(state: TicketState) -> None:
     st.caption(INTAKE_HINTS[state.ticket.type] + " 내용을 보충해 새 티켓으로 등록하세요.")
 
 
-def verdict(state: TicketState, summary: dict) -> None:
+def verdict_head(state: TicketState) -> bool:
+    """판정 제목과 한 줄 요약. 보완 요청·사람 검토 사유도 여기. 판정이 있으면 True."""
     last = state.attempts[-1] if state.attempts else None
     if state.status == "needs_info" and state.intake:
         intake_notice(state)
-        return
+        return False
     if state.human_review_reason:
         st.warning(state.human_review_reason, title="사람 검토 필요", icon=":material/person_alert:")
     if not (last and last.judge):
-        return
-    checks = last.judge.checks
+        return False
     ok = last.judge.passed
-    pending = [c for c in checks if c.passed is None]
+    pending = [c for c in last.judge.checks if c.passed is None]
     title = "실패" if not ok else (f"조건부 통과 (미평가 {len(pending)}개)" if pending else "통과")
     icon = ":material/gpp_bad:" if not ok else (":material/gpp_maybe:" if pending else ":material/verified:")
     st.subheader(f"판정 {title} · 시도 {last.number}회째", icon=icon, help=HELP["verdict"])
-
     k = ui.kpis(state)
     st.markdown(f":gray[재시도 {k['retries']}회 · {ui.attack_summary(state)}]", help=HELP["attack_summary"])
-    if pending:
-        names = ", ".join(ui.CHECK_LABELS.get(c.name, c.name) for c in pending)
-        st.info(f"{names}. 비교할 기준(정답 구현·입력 생성 규칙 등)이 없어 확인하지 못했습니다. 승인 전에 패치 diff와 "
-                "공격 로그를 직접 확인하세요.", title=f"자동으로 확인하지 못한 조건 {len(pending)}개",
-                icon=":material/visibility:")
-    check_list(checks)
+    return True
 
 
-def check_list(checks: list) -> None:
-    """판정 조건. 실패한 조건은 바로 보이고, 통과·미평가 조건은 펼쳐야 보인다 (묶음별 설명과 결과)."""
-    failed = [c for c in checks if c.passed is False]
-    for c in failed:
-        st.error(f"{ui.CHECK_HELP.get(c.name, '')}  \n결과: {c.detail}", title=ui.CHECK_LABELS.get(c.name, c.name),
-                 icon=":material/cancel:")
-    passed = sum(c.passed is True for c in checks)
-    label = f"판정 조건 보기 · 통과 {passed}개" + (f" · 실패 {len(failed)}개" if failed else "")
-    with st.expander(label, icon=":material/rule:"):
-        st.caption("코드가 검사한 통과 조건입니다. 하나라도 실패하면 수정을 다시 시킵니다.")
-        for group, items in ui.grouped_checks(checks):
-            st.markdown(f"**{group}**")
-            for c in items:
-                st.markdown(f"{CHECK_ICONS[c.passed]} {ui.CHECK_LABELS.get(c.name, c.name)}  \n"
-                            f":gray[{ui.CHECK_HELP.get(c.name, '')} → {c.detail}]")
+def tab_overview(state: TicketState, state_path: Path, replay: bool) -> bool:
+    """요약 탭: 판정, 항목별 한 줄 요약, 실패·미평가 조건, 담당자 결정. 결정했으면 True."""
+    judged = verdict_head(state)
+    if state.status == "needs_info":  # 보완 요청: 고친 것이 없으니 결정할 것도 없다
+        return False
+    rows = ui.overview_rows(state)
+    if rows:
+        st.table(rows, hide_index=True)
+    if judged:
+        checks = state.attempts[-1].judge.checks
+        for c in (c for c in checks if c.passed is False):
+            st.error(f"{c.detail}", title=f"실패: {ui.CHECK_LABELS.get(c.name, c.name)}", icon=":material/cancel:")
+        pending = [ui.CHECK_LABELS.get(c.name, c.name) for c in checks if c.passed is None]
+        if pending:
+            st.info(f"{', '.join(pending)} — 비교할 기준이 없어 확인하지 못했습니다. 승인 전에 패치 diff와 공격 로그를 "
+                    "직접 확인하세요.", icon=":material/visibility:")
+    changed = approval(state, state_path)
+    if state.ticket.demo_case:
+        answer_section(state, state_path, replay)
+        demo_panel(state.ticket, expanded=False)
+    return changed
 
 
-def process(events: list[dict], summary: dict) -> None:
-    """처리 과정: 단계별 한 줄 요약. 원본 로그는 토글로만."""
+def tab_checks(state: TicketState) -> None:
+    """판정 조건 탭: 묶음별로 무엇을 확인했고 결과가 어땠는지."""
+    last = state.attempts[-1] if state.attempts else None
+    if not (last and last.judge):
+        st.caption("판정 기록이 없습니다.")
+        return
+    st.caption("코드가 검사한 통과 조건입니다. 하나라도 실패하면 수정을 다시 시킵니다. 회색은 비교할 기준이 없어 "
+               "확인하지 못한 조건입니다.")
+    for group, items in ui.grouped_checks(last.judge.checks):
+        st.markdown(f"**{group}**")
+        for c in items:
+            st.markdown(f"{CHECK_ICONS[c.passed]} {ui.CHECK_LABELS.get(c.name, c.name)}  \n"
+                        f":gray[{ui.CHECK_HELP.get(c.name, '')} → {c.detail}]")
+
+
+def tab_process(events: list[dict], summary: dict) -> None:
+    """처리 과정 탭: 단계별 한 줄 요약. 원본 로그는 토글로만."""
     segs = summary["segments"]
     if not segs:
+        st.caption("실행 기록이 없습니다.")
         return
     turns = sum(s["turns"] for s in segs)
     tools = sum(s["tools"] for s in segs)
-    label = "처리 과정 (단계별 기록)"
-    with st.expander(label, expanded=st.session_state.pop("show_process", False), icon=":material/timeline:"):
-        st.caption(f"LLM 호출 {turns}회 · 도구 호출 {tools}회")
-        st.dataframe(
-            [{"단계": s["stage"], "시도": s["attempt"],
-              "LLM 턴": s["turns"], "도구 호출": s["tools"], "결과": s["result"]} for s in segs],
-            hide_index=True, alt="단계별 처리 요약",
-            column_config={"결과": st.column_config.TextColumn(width="large")},
-        )
-        if st.toggle("원본 실행 로그 보기", key="raw_log"):
-            lines = [m for e in events if (m := ui.event_message(e))]
-            st.code("\n".join(lines), language=None, height=320)
+    st.caption(f"LLM 호출 {turns}회 · 도구 호출 {tools}회")
+    st.dataframe(
+        [{"단계": s["stage"], "시도": s["attempt"],
+          "LLM 턴": s["turns"], "도구 호출": s["tools"], "결과": s["result"]} for s in segs],
+        hide_index=True, alt="단계별 처리 요약",
+        column_config={"결과": st.column_config.TextColumn(width="large")},
+    )
+    if st.toggle("원본 실행 로그 보기", key="raw_log"):
+        lines = [m for e in events if (m := ui.event_message(e))]
+        st.code("\n".join(lines), language=None, height=320)
 
 
 # ---------------- 탭 ----------------
@@ -687,12 +700,13 @@ def approval(state: TicketState, state_path: Path) -> bool:
                 st.error(d.reason, title=f"반려됨 · {d.decided_at}", icon=":material/block:")
             return False
         allowed = ui.can_approve(state)
-        st.markdown("**담당자 결정**", help=HELP["approval"])
-        if st.button("승인 후 반영", icon=":material/check:", type="primary", disabled=not allowed, width="stretch",
-                     help=None if allowed else "판정을 통과한 승인 대기 티켓만 승인할 수 있습니다"):
+        row = st.container(horizontal=True, vertical_alignment="center")
+        row.markdown("**담당자 결정**", help=HELP["approval"], width="content")
+        if row.button("승인 후 반영", icon=":material/check:", type="primary", disabled=not allowed,
+                      help=None if allowed else "판정을 통과한 승인 대기 티켓만 승인할 수 있습니다"):
             ui.decide(state, state_path, approve=True)
             return True
-        with st.popover("반려", icon=":material/undo:", width="stretch"):
+        with row.popover("반려", icon=":material/undo:"):
             reason = st.text_area("반려 사유", key=f"reason-{state.ticket.ticket_id}",
                                   placeholder="예: 경계값(정확히 10만 원) 처리 근거 부족")
             if st.button("반려 확정", type="primary", width="stretch"):
@@ -732,43 +746,25 @@ def main() -> None:
         st.info("아직 실행하지 않은 티켓입니다. 실행을 누르세요.", icon=":material/info:")
         return
     summary = ui.run_summary(events)
-    left, right = st.columns([3, 1], gap="large")
-    with right:  # 담당자 결정은 스크롤하지 않아도 보이게 오른쪽 위에
-        if decision_panel(state, state_path, replay):
+    # 첫 탭(요약)에서 판정·항목별 한 줄·결정까지 끝내고, 자세한 내용은 필요한 탭만 연다 (위아래로 길어지지 않게)
+    tabs = st.tabs([":material/summarize: 요약", ":material/my_location: 결함 위치", ":material/menu_book: 근거",
+                    ":material/difference: 패치 diff", ":material/swords: 공격 로그", ":material/rule: 판정 조건",
+                    ":material/timeline: 처리 과정"])
+    with tabs[0]:
+        if tab_overview(state, state_path, replay):
             st.rerun()
-    with left:
-        verdict(state, summary)
-        process(events, summary)
-        tabs = st.tabs([":material/my_location: 결함 위치", ":material/menu_book: 근거",
-                        ":material/difference: 패치 diff", ":material/swords: 공격 로그"])
-        with tabs[0]:
-            tab_location(state)
-        with tabs[1]:
-            tab_evidence(state)
-        with tabs[2]:
-            tab_diff(state)
-        with tabs[3]:
-            tab_attack(state)
-
-
-APPROVAL_CHECKS = (  # 사용 설명서 5장 "승인 전 확인 목록"
-    "패치 diff: 대상 함수만, 의도한 부분만 바뀌었는지",
-    "근거: 인용한 규칙이 이 SR에 맞는지",
-    "미평가 조건: 자동으로 못 본 부분을 직접 봤는지",
-    "재현 테스트: 기대값이 업무 규칙과 맞는지",
-)
-
-
-def decision_panel(state: TicketState, state_path: Path, replay: bool) -> bool:
-    """오른쪽 열: 승인·반려, (시연 케이스) 정답 확인과 확인할 것, 승인 전 확인 목록. 결정했으면 True."""
-    changed = approval(state, state_path)
-    if state.ticket.demo_case:
-        answer_section(state, state_path, replay)
-        demo_panel(state.ticket)
-    elif not state.decision:
-        with st.expander("승인 전 확인", icon=":material/checklist:"):
-            st.markdown("\n".join(f"- {c}" for c in APPROVAL_CHECKS))
-    return changed
+    with tabs[1]:
+        tab_location(state)
+    with tabs[2]:
+        tab_evidence(state)
+    with tabs[3]:
+        tab_diff(state)
+    with tabs[4]:
+        tab_attack(state)
+    with tabs[5]:
+        tab_checks(state)
+    with tabs[6]:
+        tab_process(events, summary)
 
 
 def answer_section(state: TicketState, state_path: Path, replay: bool) -> None:
