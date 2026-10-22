@@ -44,8 +44,16 @@ ATTACK = AgentSpec(
 )
 
 
-def analysis_input(ticket: Ticket, feedback: str | None = None) -> str:
+def analysis_input(ticket: Ticket, feedback: str | None = None, signal: dict | None = None,
+                   candidates: list[dict] | None = None) -> str:
     text = f"[티켓 {ticket.ticket_id}] 유형: {TYPE_LABELS[ticket.type]}\n제목: {ticket.title}\n본문: {ticket.body}"
+    if candidates:
+        text += ("\n\n[모델 예측 Top-3 (참고 자료, 이미 실행함)]\n"
+                 + json.dumps(candidates, ensure_ascii=False, indent=1))
+    if signal and signal.get("low"):
+        text += ("\n\n[예측 신호: 낮음] 이 티켓은 결함 위치 모델이 학습한 티켓 분포 밖이다 ("
+                 + "; ".join(signal["reasons"]) + "). 업무와 무관하거나 증상이 모호할 수 있으니, "
+                 "티켓 증상과 원인 함수를 근거로 잇지 못하면 confident=false로 멈춘다.")
     if feedback:
         text += f"\n\n[이전 분석의 문제]\n{feedback}"
     return text
@@ -74,7 +82,8 @@ def fix_input(ticket: Ticket, analysis: AnalysisOutput | None, previous: list[Fi
 
 
 def attack_input(ticket: Ticket, analysis: AnalysisOutput | None, fix: FixOutput | None, diff: str,
-                 angle: tuple[str, str, str] | None = None, round_no: int = 1, rounds: int = 1) -> str:
+                 angle: tuple[str, str, str] | None = None, round_no: int = 1, rounds: int = 1,
+                 context: dict | None = None) -> str:
     """공격 에이전트 입력: 티켓, 결함 위치, 패치 설명, 근거 규칙 본문, diff, 이번 라운드의 관점.
     정답 구현(판정 명세)은 넣지 않는다.
 
@@ -97,4 +106,19 @@ def attack_input(ticket: Ticket, analysis: AnalysisOutput | None, fix: FixOutput
     if angle:
         payload["angle"] = {"name": angle[0], "label": angle[1], "instruction": angle[2],
                             "round": f"{round_no}/{rounds}"}
+    if context:  # 미리 가져온 코드·이력 (같은 도구를 다시 부르지 않게)
+        payload["context"] = context
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def prediction_context(ws, prediction: list[dict]) -> list[dict]:
+    """분석 입력에 넣을 모델 예측 Top-k와 후보 함수 코드 (분석이 predict·read_method를 다시 부르지 않게)."""
+    from sr_agent.tools.code import read_method
+
+    rows = []
+    for rank, p in enumerate(prediction, 1):
+        code = read_method(ws, p["method"])
+        rows.append({"rank": rank, "method": p["method"],
+                     "reasons": [r.get("label", r.get("feature")) for r in p.get("reasons", [])],
+                     "code": code[:config.PREFETCH_CODE_CHARS] if isinstance(code, str) else ""})
+    return rows

@@ -17,6 +17,8 @@ from sr_agent.workflow.state import (
     AttackOutput,
     Evidence,
     FixOutput,
+    IntakeOutput,
+    IntakeResult,
     JudgeSpec,
     ReferenceImpl,
     Ticket,
@@ -35,6 +37,9 @@ WRONG = "from order_settlement import calc\n\n\ndef test_wrong():\n    assert ca
 WEAK = "from order_settlement import calc\n\n\ndef test_ok():\n    assert calc.payable(500, 100) == 400\n"
 GOOD = "def payable(amount, discount):\n    return max(0, amount - discount)\n"
 BAD = "def payable(amount, discount):\n    return 0\n"
+ACCEPTED = IntakeResult(accepted=True, output=IntakeOutput(
+    is_change_request=True, in_domain=True, symptom_quote="결제 금액이 음수입니다", expected_behavior="0원 이상",
+    missing=[], reason="증상이 분명함"))
 PREDICTION = [{"method": "calc.settle", "score": 0.9, "reasons": []},
               {"method": "calc.payable", "score": 0.5, "reasons": []}]
 
@@ -43,7 +48,9 @@ def analysis_output(path="repro_tests/test_never_negative.py"):
     return AnalysisOutput(final_method="calc.payable", model_top3=["calc.settle", "calc.payable", "fees.fee"],
                           model_rank=2, reason="0원 하한 없음", disagreement="settle은 payable을 호출할 뿐",
                           evidence=[Evidence(kind="caller", ref="calc.settle", note="payable 호출")],
-                          history_ids=["HIS-1"], repro_test_path=path)
+                          history_ids=["HIS-1"], repro_test_path=path,
+                          ticket_symptom="할인이 크면 결제 금액이 음수입니다",
+                          symptom_check="test_never_negative: 결제 금액 == 0", confident=True, blocker="")
 
 
 class FakeAgents:
@@ -85,10 +92,15 @@ def isolated_memory(tmp_path, monkeypatch):
 
 @pytest.fixture
 def run(bug_target, tmp_path, monkeypatch):
-    def _run(agents, ticket=TICKET, **kw):
+    def _run(agents, ticket=TICKET, intake=ACCEPTED, signal=None, **kw):
+        def check(client, ticket, ctx):
+            if intake is None:
+                raise AssertionError("접수 검사를 부르면 안 됨")
+            return intake
         monkeypatch.setattr(graph, "run_agent", agents)
         monkeypatch.setattr(attack_mod, "run_agent", agents)
-        monkeypatch.setattr(graph, "predict_fault_location", lambda text, k: PREDICTION)
+        monkeypatch.setattr(graph, "predict_with_signal", lambda text, k: (PREDICTION, signal))
+        monkeypatch.setattr(graph, "check_ticket", check)
         return graph.run_ticket(ticket, client=None, source=bug_target, runs_dir=tmp_path / "runs", **kw)
     return _run
 
@@ -185,8 +197,8 @@ def test_standardize_skips_analysis_and_uses_type_judge(run):
     assert agents.inputs["analysis"] == [] and state.analysis is None
     assert json.loads(agents.inputs["fix"][0])["analysis"]["method"] == "calc.payable"
     checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
-    assert checks == {"behavior_preserved": True, "attack_findings_rechecked": None, "deprecated_zero": True,
-                      "style_zero": True, "existing_tests_pass": True, "change_scope": True}
+    assert checks == {"intake_accepted": True, "behavior_preserved": True, "attack_findings_rechecked": None,
+                      "deprecated_zero": True, "style_zero": True, "existing_tests_pass": True, "change_scope": True}
     assert state.status == "approval_pending"
 
 
@@ -264,9 +276,9 @@ def _angles(agents) -> list[str]:
 
 
 def test_attack_rounds_escalate_on_failure_and_stop_early(run):
-    """1회째: 기본 3라운드, 확인된 발견이 있어 그 묶음에서 멈춤. 2회째: 판정 실패 이력 → 5라운드."""
+    """focused_retry=False(E2E 측정 조건): 1회째 기본 3라운드에서 멈춤, 2회째는 판정 실패 이력 → 5관점 전부."""
     agents = FakeAgents(patches=[BAD, GOOD], findings=[UNDER, FAKE])
-    state = run(agents)
+    state = run(agents, options=graph.RunOptions(focused_retry=False, prefetch_context=False))
     first, second = (a.attack for a in state.attempts)
     assert first.planned_rounds == 3 and len(first.rounds) == 3 and first.escalation == ""
     assert second.planned_rounds == 5 and len(second.rounds) == 5  # 2회째는 확인된 발견이 없어 두 묶음 모두
@@ -274,6 +286,49 @@ def test_attack_rounds_escalate_on_failure_and_stop_early(run):
     assert _angles(agents)[3:] and set(_angles(agents)[3:]) == {a[0] for a in config.ATTACK_ANGLES}
     # 라운드마다 같은 발견을 내도 입력이 같으면 하나만 남는다
     assert len(first.findings) == 2 and {f.angle for f in first.findings} <= {"boundary", "types", "callers"}
+
+
+def test_focused_retry_uses_hit_and_new_angles(run):
+    """기본(화면 실행): 재시도는 판정이 실제 문제로 확인한 입력을 찾은 관점 + 아직 안 쓴 관점, 3라운드 한 묶음."""
+    agents = FakeAgents(patches=[BAD, GOOD], findings=[UNDER, FAKE])
+    state = run(agents)
+    first, second = (a.attack for a in state.attempts)
+    assert first.planned_rounds == 3
+    # FAKE([500,100])는 BAD 패치에서 정답과 달라 판정이 확인 → 그 입력을 처음 낸 관점(경계값) + 새 관점 2개
+    assert [r.angle for r in second.rounds] == ["boundary", "combination", "property"]
+    assert second.planned_rounds == 3
+    assert second.escalation.startswith("이전 시도 판정 실패 → 문제를 찾았던 관점(경계값)")
+    assert "새 관점(조합·순서·성질 기반)" in second.escalation
+    assert state.status == "approval_pending"
+
+
+def test_attack_input_has_prefetched_context(run):
+    agents = FakeAgents()
+    run(agents)
+    context = json.loads(agents.inputs["attack"][0])["context"]
+    assert context["method"] == "calc.payable" and "def payable" in context["patched_code"]
+    assert "calc.settle" in context["callers"] and "def settle" in context["caller_code"]["calc.settle"]
+    assert context["attack_memory"] == []
+    assert "[모델 예측 Top-3 (참고 자료, 이미 실행함)]" in agents.inputs["analysis"][0]
+    assert '"method": "calc.payable"' in agents.inputs["analysis"][0]  # 후보 코드도 함께
+    off = FakeAgents()
+    run(off, ticket=TICKET.model_copy(update={"ticket_id": "SR-0004"}),
+        options=graph.RunOptions(prefetch_context=False))
+    assert "context" not in json.loads(off.inputs["attack"][0])
+    assert "[모델 예측" not in off.inputs["analysis"][0]
+
+
+def test_plan_angles_rules():
+    from sr_agent.workflow.state import AttackReport, AttackRound, FixAttempt
+
+    names = [a[0] for a in config.ATTACK_ANGLES]
+    assert [a[0] for a in attack_mod.plan_angles(1)[0]] == names[:3]
+    assert [a[0] for a in attack_mod.plan_angles(2, focused=False)[0]] == names  # 5관점 전부
+    # 이전 시도가 공격이 아닌 이유(예: 기존 테스트)로 실패했으면 아직 안 쓴 관점부터
+    prev = FixAttempt(number=1, attack=AttackReport(rounds=[AttackRound(angle=n, label="") for n in names[:3]]))
+    angles, why = attack_mod.plan_angles(2, [prev])
+    assert [a[0] for a in angles] == ["combination", "property", "boundary"] and "새 관점" in why
+    assert len(attack_mod.plan_angles(2, [prev], override=1)[0]) == 1  # 실행 옵션이 우선
 
 
 def test_attack_round_error_does_not_stop_other_rounds(run):
@@ -351,3 +406,72 @@ def test_quota_exhausted_stops_without_finishing_and_resumes(run, tmp_path):
     other = FakeAgents(patches=[LLMError("API 호출 실패 (APITimeoutError): Request timed out.")])
     state = run(other, ticket=TICKET.model_copy(update={"ticket_id": "SR-0002"}))
     assert state.status == "human_review" and "APITimeoutError" in state.human_review_reason  # 이 티켓만
+
+
+# ---------------- 접수 검사·티켓 증상 연결 (F5-0, v1.2) ----------------
+
+def test_rejected_intake_stops_before_analysis(run):
+    """접수 검사에서 걸린 티켓은 분석·수정 없이 '보완 요청'으로 끝나고, 다시 실행해도 그대로다."""
+    rejected = IntakeResult(accepted=False, problems=["시스템 수정 요청으로 볼 수 없음"])
+    agents = FakeAgents()
+    state = run(agents, intake=rejected)
+    assert state.status == "needs_info" and "수정 요청으로 볼 수 없음" in state.human_review_reason
+    assert agents.inputs == {"analysis": [], "fix": [], "attack": []} and state.attempts == []
+    assert run(FakeAgents(), intake=None).status == "needs_info"  # 끝난 상태: 접수 검사도 다시 하지 않음
+
+
+def test_intake_off_skips_check(run):
+    state = run(FakeAgents(), intake=None, options=graph.RunOptions(use_intake=False))
+    assert state.intake is None and state.status == "approval_pending"
+    assert "intake_accepted" not in {c.name for c in state.attempts[0].judge.checks}
+
+
+def test_judge_records_intake_and_symptom_link(run):
+    state = run(FakeAgents())
+    checks = {c.name: c.passed for c in state.attempts[0].judge.checks}
+    assert checks["intake_accepted"] is True and checks["ticket_symptom_linked"] is True
+
+
+class _Unsure(FakeAgents):
+    def __call__(self, client, spec, user_input, ctx):
+        result = super().__call__(client, spec, user_input, ctx)
+        if spec.name == "analysis":
+            result.output = result.output.model_copy(update={"confident": False, "blocker": "증상이 모호함"})
+        return result
+
+
+def test_unconfident_analysis_stops_without_fix(run):
+    """분석이 확신하지 못하면 억지로 고치지 않는다 (PRD N5③)."""
+    agents = _Unsure()
+    state = run(agents)
+    assert state.status == "human_review" and "분석 확신 불가: 증상이 모호함" in state.human_review_reason
+    assert agents.inputs["fix"] == [] and state.attempts == [] and not state.repro_verified
+
+
+class _Paraphrase(FakeAgents):
+    """첫 분석은 티켓에 없는 문장을 증상으로 인용한다."""
+
+    def __call__(self, client, spec, user_input, ctx):
+        result = super().__call__(client, spec, user_input, ctx)
+        if spec.name == "analysis" and len(self.inputs["analysis"]) == 1:
+            result.output = result.output.model_copy(update={"ticket_symptom": "쿠폰 적용 시 정산 오류"})
+        return result
+
+
+def test_symptom_not_in_ticket_retries_analysis(run):
+    agents = _Paraphrase(repro_codes=[REPRO, REPRO])
+    state = run(agents)
+    assert state.status == "approval_pending" and state.analysis_tries == 2
+    assert "ticket_symptom이 티켓 본문에 없음" in agents.inputs["analysis"][1]
+
+
+def test_low_signal_is_saved_and_passed_to_analysis(run):
+    signal = {"top1": -5.4, "low": True, "reasons": ["1위 점수 -5.400 < 기준 -1.849"]}
+    agents = FakeAgents()
+    state = run(agents, signal=signal)
+    assert state.prediction_signal == signal
+    assert "[예측 신호: 낮음]" in agents.inputs["analysis"][0] and "-1.849" in agents.inputs["analysis"][0]
+    other = FakeAgents()
+    run(other, ticket=TICKET.model_copy(update={"ticket_id": "SR-0003"}),
+        options=graph.RunOptions(use_predict=False), signal=signal)
+    assert "[예측 신호" not in other.inputs["analysis"][0]  # 예측 도구를 끈 조건에는 넘기지 않는다

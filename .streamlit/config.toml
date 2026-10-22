@@ -14,4 +14,5 @@ backgroundColor = "#f4f6fb"
 toolbarMode = "minimal"
 
 [server]
-address = "localhost"
+# 같은 네트워크의 다른 기기에서도 접속 가능 (로그인 없음)
+address = "0.0.0.0"

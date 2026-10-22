@@ -58,6 +58,7 @@ def dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPLAY_DIR", tmp_path / "replay")
     monkeypatch.setattr(config, "CHROMA_DIR", tmp_path / "chroma")
     monkeypatch.setattr(config, "REPLAY_EVENT_DELAY_S", 0)
+    monkeypatch.setenv(config.LIVE_PASSWORD_ENV, "")  # .env에 비밀번호가 있어도 테스트는 열린 상태로
     return tmp_path
 
 
@@ -168,7 +169,9 @@ def test_app_replay_renders_and_approves(dirs):
     assert len(at.tabs) == 4 and [t.label.split(": ")[-1] for t in at.tabs] == ["결함 위치", "근거", "패치 diff",
                                                                                  "공격 로그"]
     assert any("판정 통과" in s.value for s in at.subheader)
-    assert any(m.label == "판정 조건" for m in at.metric)  # 결론 카드를 본문 위쪽에
+    assert not at.metric  # 결론 카드(판정 조건 수·시간·토큰)는 없애고 한 줄 요약으로
+    assert any("재시도 1회 · 공격이" in m.value for m in at.markdown)
+    assert any(e.label.startswith("판정 조건 보기 · 통과") for e in at.expander)  # 통과한 조건은 접어 둔다
     approve = next(b for b in at.button if b.label == "승인 후 반영")
     assert not approve.disabled
     approve.click().run()
@@ -182,7 +185,7 @@ def test_app_approve_disabled_when_judge_failed(dirs):
     approve = next(b for b in at.button if b.label == "승인 후 반영")
     assert approve.disabled
     assert any("사람 검토" in w.value for w in at.warning) is False  # 사유 없는 사람 검토 상태
-    assert any("실패" in e.label for e in at.expander)  # 실패한 판정 조건은 펼쳐서 보여 준다
+    assert any("결과:" in e.value for e in at.error)  # 실패한 판정 조건은 접지 않고 결과와 함께 바로 보인다
     at.text_area[0].input("정답과 다름").run()
     next(b for b in at.button if b.label == "반려 확정").click().run()
     assert TicketState.load(ui.replay_working_path("SR-2041")).decision.reason == "정답과 다름"
@@ -346,3 +349,186 @@ def test_app_replay_demo_answer_check(dirs):
     next(b for b in at.button if b.label == "정답 확인").click().run()
     assert not at.exception
     assert any("정답과 맞습니다" in s.value for s in at.success)
+
+
+# ---------------- 결과 삭제·조건 묶음·백그라운드 실행 (v1.2) ----------------
+
+def test_delete_results_removes_runs_and_registry(dirs):
+    ticket = ui.register_ticket("defect", "포인트 중복 적립", "포인트로 결제하면 적립 포인트가 두 번 쌓입니다.")
+    tid = ticket.ticket_id
+    root = config.RUNS_DIR / tid
+    root.mkdir(parents=True)
+    TicketState(ticket=ticket, run_ids=[f"{tid}-20261022-100000"]).save(root / config.STATE_FILENAME)
+    (config.RUNS_DIR / f"{tid}-20261022-100000.jsonl").write_text("{}", encoding="utf-8")
+    (config.RUNS_DIR / f"{tid}-20261022-090000.jsonl").write_text("{}", encoding="utf-8")  # 상태에 없는 끊긴 실행
+    other = config.RUNS_DIR / "SR-90010-20261022-100000.jsonl"  # 비슷한 이름의 다른 티켓 로그는 남긴다
+    other.write_text("{}", encoding="utf-8")
+    assert tid in ui.tickets_with_results()
+    result = ui.delete_results(tid, remove_ticket=True)
+    assert result == {"dirs": 1, "logs": 2, "ticket_removed": True}
+    assert not root.exists() and other.exists() and not ui.is_registered(tid)
+    # 시연 S1~S3는 결과만 지우고 목록에는 남는다
+    (config.RUNS_DIR / "SR-2041").mkdir()
+    _state().save(config.RUNS_DIR / "SR-2041" / config.STATE_FILENAME)
+    assert ui.delete_results("SR-2041", remove_ticket=True)["ticket_removed"] is False
+    assert any(t.ticket_id == "SR-2041" for t in ui.all_tickets())
+    with pytest.raises(ValueError):
+        ui.delete_results("../etc")
+
+
+def test_grouped_checks_cover_every_label():
+    from sr_agent.workflow.state import JudgeCheck
+
+    checks = [JudgeCheck(name=n, passed=True, detail="") for n in ui.CHECK_LABELS]
+    checks.append(JudgeCheck(name="new_check", passed=None, detail=""))
+    groups = dict(ui.grouped_checks(checks))
+    assert [c.name for c in groups["공격 결과 재확인"]][0] == "attack_findings_rechecked"
+    assert [c.name for c in groups["기타"]] == ["new_check"]
+    assert set(ui.CHECK_HELP) == set(ui.CHECK_LABELS)  # 모든 조건에 설명이 있다
+
+
+def test_job_manager_runs_in_background_once():
+    import threading
+
+    from sr_agent.jobs import JobManager
+
+    gate = threading.Event()
+    jobs = JobManager()
+
+    def work(progress):
+        progress("분석 에이전트 실행")
+        gate.wait(5)
+        return "approval_pending"
+    job = jobs.start("SR-1", work)
+    assert jobs.running("SR-1")
+    with pytest.raises(ValueError, match="이미 실행 중"):
+        jobs.start("SR-1", work)
+    jobs.forget("SR-1")
+    assert jobs.get("SR-1") is job  # 실행 중에는 지우지 않는다
+    gate.set()
+    for _ in range(100):
+        if job.done:
+            break
+        threading.Event().wait(0.05)
+    assert job.done and job.result == "approval_pending" and job.last_message == "분석 에이전트 실행"
+
+    failed = jobs.start("SR-2", lambda progress: (_ for _ in ()).throw(RuntimeError("크레딧 소진")))
+    for _ in range(100):
+        if failed.done:
+            break
+        threading.Event().wait(0.05)
+    assert failed.error == "크레딧 소진" and not jobs.running("SR-2")
+
+
+def test_app_live_run_survives_interaction(dirs, monkeypatch):
+    """실행은 백그라운드에서 돈다: 실행 중 다른 티켓을 골라도 끊기지 않고, 돌아오면 진행 화면, 끝나면 결과."""
+    import threading
+
+    from sr_agent import llm
+    from sr_agent.workflow import graph
+
+    gate, calls = threading.Event(), []
+
+    def fake_run(ticket, client, restart=False, progress=lambda m: None, **kw):
+        calls.append(ticket.ticket_id)
+        progress("분석 에이전트 실행 (1/3)")
+        gate.wait(20)
+        state = _state().model_copy(update={"ticket": ticket})
+        path = ui.live_state_path(ticket.ticket_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state.save(path)
+        return state
+    monkeypatch.setattr(graph, "run_ticket", fake_run)
+    monkeypatch.setattr(llm, "get_client", lambda: None)
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    at.sidebar.segmented_control[0].set_value("실시간").run()
+    at.sidebar.radio[0].set_value("SR-2077").run()
+    next(b for b in at.button if b.label == "실행").click().run()
+    assert not at.exception
+    assert any("서버에서 처리 중" in c.value for c in at.caption)
+    at.sidebar.radio[0].set_value("SR-2041").run()  # 다른 티켓을 봐도
+    at.sidebar.radio[0].set_value("SR-2077").run()
+    assert any("서버에서 처리 중" in c.value for c in at.caption) and calls == ["SR-2077"]  # 같은 실행이 계속
+    gate.set()
+    for _ in range(100):
+        if ui.live_state_path("SR-2077").is_file():
+            break
+        threading.Event().wait(0.05)
+    threading.Event().wait(0.3)
+    at.run()
+    assert not at.exception
+    assert any("판정 통과" in s.value for s in at.subheader) and calls == ["SR-2077"]
+
+
+def test_finding_verdict_and_attack_summary():
+    """공격의 미달·회귀는 주장일 뿐: 판정이 다시 실행해 정답과 다를 때만 실제 문제로 보여 준다."""
+    from sr_agent.tools.attack import input_key
+
+    def finding(inp):
+        return VerifiedFinding(kind="under_fix", method="discount.apply_coupon", input_json=inp, expected_json="0",
+                               rule_id="BIZ-CPN-02", explanation="", verified=True)
+    real, fine, broken = finding("[1, 2]"), finding("[3, 4]"), finding("not json")
+    check = JudgeCheck(name="attack_findings_rechecked", passed=False, detail="",
+                       data={"mismatches": 1, "failed_keys": [input_key("discount.apply_coupon", [1, 2])]})
+    att = FixAttempt(number=1, attack=AttackReport(findings=[real, fine, broken]),
+                     judge=JudgeResult(passed=False, checks=[check]))
+    assert [ui.finding_verdict(att, f) for f in (real, fine, broken)] == ["실제 문제", "문제 아님", "실행 불가"]
+    state = TicketState(ticket=TICKET, attempts=[att])
+    assert ui.attack_summary(state) == "공격이 제기한 문제 3건 → 판정이 다시 실행해 실제 문제 1건"
+    unjudged = att.model_copy(update={"judge": JudgeResult(passed=True, checks=[
+        check.model_copy(update={"passed": None})])})
+    assert ui.finding_verdict(unjudged, real) == "미평가"
+    assert "자동 재확인 못함" in ui.attack_summary(TicketState(ticket=TICKET, attempts=[unjudged]))
+    assert ui.format_result({"ok": True, "value": -5}) == "-5"
+    assert ui.format_result({"ok": False, "exception": "ValueError: x"}) == "예외: ValueError: x"
+
+
+def test_app_delete_button_flow(dirs):
+    """실행 버튼 줄의 삭제 → 확인 창 → 결과·등록 삭제. 결과가 없는 S1~S3는 비활성, 사이드바 결과 정리도 동작."""
+    ticket = ui.register_ticket("defect", "포인트 중복 적립", "포인트로 결제하면 적립 포인트가 두 번 쌓입니다.")
+    tid = ticket.ticket_id
+    for t in (tid, "SR-2077"):
+        root = config.RUNS_DIR / t
+        root.mkdir(parents=True)
+        _state().model_copy(update={"ticket": ticket if t == tid else ui.scenario_tickets()[1],
+                                    "run_ids": [f"{t}-20261022-100000"]}).save(root / config.STATE_FILENAME)
+        (config.RUNS_DIR / f"{t}-20261022-100000.jsonl").write_text("", encoding="utf-8")
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    at.sidebar.segmented_control[0].set_value("실시간").run()
+    at.sidebar.radio[0].set_value("SR-2041").run()
+    assert at.button(key="delete_results").disabled  # 결과 없는 시연 티켓
+    at.sidebar.radio[0].set_value(tid).run()
+    delete = at.button(key="delete_results")
+    assert not delete.disabled
+    delete.click().run()
+    assert not at.exception
+    assert next(c for c in at.checkbox if c.label == "티켓도 목록에서 삭제").value is True  # 확인 창이 열림
+    at.button(key="delete_cancel").click().run()  # 취소하면 창이 닫히고 아무것도 지우지 않는다
+    assert (config.RUNS_DIR / tid).exists() and not any(c.label == "티켓도 목록에서 삭제" for c in at.checkbox)
+    at.button(key="delete_results").click().run()
+    at.button(key="delete_confirm").click().run()
+    assert not at.exception
+    assert not (config.RUNS_DIR / tid).exists() and not (config.RUNS_DIR / f"{tid}-20261022-100000.jsonl").exists()
+    assert not ui.is_registered(tid) and not any(o.startswith(tid) for o in at.sidebar.radio[0].options)
+    # 사이드바 결과 정리: S2 결과를 지워도 S2 티켓은 목록에 남는다
+    at.sidebar.multiselect[0].select("SR-2077").run()
+    next(b for b in at.sidebar.button if b.label == "선택한 결과 삭제").click().run()
+    assert not at.exception and not (config.RUNS_DIR / "SR-2077").exists()
+    assert any(o.startswith("SR-2077") for o in at.sidebar.radio[0].options)
+
+
+def test_app_live_mode_password(dirs, monkeypatch):
+    """비밀번호가 설정돼 있으면 실시간 모드(API 호출)는 맞힐 때까지 티켓을 보여 주지 않는다. 재생 모드는 그대로."""
+    monkeypatch.setenv(config.LIVE_PASSWORD_ENV, "s3cret")
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    at.sidebar.segmented_control[0].set_value("실시간").run()
+    assert not at.sidebar.radio and at.sidebar.text_input[0].label == "실시간 모드 비밀번호"
+    at.sidebar.text_input[0].input("wrong")
+    at.sidebar.button[0].click().run()
+    assert any("비밀번호가 다릅니다" in e.value for e in at.sidebar.error) and not at.sidebar.radio
+    at.sidebar.text_input[0].input("s3cret")
+    at.sidebar.button[0].click().run()
+    assert not at.exception and any(o.startswith("SR-2041") for o in at.sidebar.radio[0].options)

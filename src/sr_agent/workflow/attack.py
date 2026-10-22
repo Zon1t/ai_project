@@ -2,6 +2,8 @@
 
 라운드: 수정 시도 1회마다 관점(config.ATTACK_ANGLES)을 하나씩 맡은 공격을 여러 번 한다.
 - 기본 config.ATTACK_ROUNDS회. 이 티켓의 이전 시도가 판정에서 실패했으면(재시도) config.ATTACK_ROUNDS_WITH_HISTORY회.
+  focused 재시도(v1.2, 화면 실행 기본)는 문제를 찾았던 관점 + 아직 쓰지 않은 관점으로
+  config.ATTACK_RETRY_FOCUSED_ROUNDS회.
   공격 이력은 라운드 수에 쓰지 않는다 (오탐이 섞이면 라운드만 늘어남). 이력은 각 라운드가 먼저 검색해 재사용한다.
 - config.ATTACK_PARALLEL개씩 묶어 동시에 실행하고, 한 묶음에서 확인된 발견이 나오면 다음 묶음은 건너뛴다
   (판정이 실패해 어차피 재시도하므로).
@@ -82,13 +84,66 @@ def plan_rounds(attempt_number: int, override: int | None = None) -> tuple[int, 
     return min(config.ATTACK_ROUNDS, len(config.ATTACK_ANGLES)), ""
 
 
+_ANGLES = {a[0]: a for a in config.ATTACK_ANGLES}
+
+
+def plan_angles(attempt_number: int, previous: list[FixAttempt] = (), override: int | None = None,
+                focused: bool = True) -> tuple[list[tuple[str, str, str]], str]:
+    """이번 시도에 쓸 관점과 그 이유.
+
+    첫 시도·실행 옵션·focused=False는 plan_rounds대로 앞에서부터 (기본 3, 재시도 5).
+    focused 재시도(v1.2): ① 이전 시도에서 판정이 실제 문제로 확인한 입력을 찾은 관점 ② 아직 쓰지 않은 관점
+    ③ 나머지 순으로 config.ATTACK_RETRY_FOCUSED_ROUNDS개. 이전 공격 입력은 판정이 어차피 모두 다시 실행한다.
+    """
+    if override is not None or attempt_number <= 1 or not focused:
+        n, why = plan_rounds(attempt_number, override)
+        return list(config.ATTACK_ANGLES[:n]), why
+    hit: list[str] = []
+    for a in previous:
+        if a.attack and a.judge:
+            hit += [f.angle for f in confirmed_findings(a.attack, a.judge) if f.angle in _ANGLES]
+    used = {r.angle for a in previous if a.attack for r in a.attack.rounds}
+    unused = [n for n in _ANGLES if n not in used]
+    order = list(dict.fromkeys([*hit, *unused, *_ANGLES]))[:config.ATTACK_RETRY_FOCUSED_ROUNDS]
+
+    def label(names: list[str]) -> str:
+        return "·".join(_ANGLES[n][1] for n in names)
+    found = [n for n in order if n in hit]
+    fresh = [n for n in order if n in unused and n not in hit]
+    parts = ([f"문제를 찾았던 관점({label(found)})"] if found else []) + \
+        ([f"새 관점({label(fresh)})"] if fresh else [])
+    return [_ANGLES[n] for n in order], "이전 시도 판정 실패 → " + (" + ".join(parts) or label(order))
+
+
+def attack_context(ws: Workspace, ticket: Ticket, method: str) -> dict:
+    """공격 라운드들이 공통으로 읽던 것을 한 번만 가져온다: 수정된 함수 코드, 호출부와 그 코드, 공격 이력."""
+    from sr_agent.tools.code import get_callers, read_method
+
+    callers = get_callers(ws, method)
+    callers = callers if isinstance(callers, list) else []
+    caller_code = {}
+    for m in callers[:config.PREFETCH_MAX_CALLERS]:
+        src = read_method(ws, m)
+        if isinstance(src, str):
+            caller_code[m] = src[:config.PREFETCH_CODE_CHARS]
+    patched = read_method(ws, method)
+    memory = attack_memory("search", ticket.type, {"method": method})
+    return {
+        "method": method,
+        "patched_code": patched[:config.PREFETCH_CODE_CHARS] if isinstance(patched, str) else "",
+        "callers": callers,
+        "caller_code": caller_code,
+        "attack_memory": memory[:config.ATTACK_MEMORY_TOP_K] if isinstance(memory, list) else [],
+    }
+
+
 def _run_round(client: OpenAI, ticket: Ticket, analysis: AnalysisOutput | None, attempt: FixAttempt,
                ctx: RunContext, angle: tuple[str, str, str], round_no: int, rounds: int,
-               ) -> tuple[AttackRound, list[VerifiedFinding]]:
+               context: dict | None = None) -> tuple[AttackRound, list[VerifiedFinding]]:
     """관점 하나로 공격하고 발견을 확인한다. 응답 거부는 그대로 올린다 (사람 검토)."""
     rnd = AttackRound(angle=angle[0], label=angle[1])
     ctx = replace(ctx, log=ctx.log.tagged(angle=angle[0]))  # 동시에 도는 라운드의 로그 줄을 구분 (예산은 공유)
-    user_input = attack_input(ticket, analysis, attempt.fix, attempt.diff, angle, round_no, rounds)
+    user_input = attack_input(ticket, analysis, attempt.fix, attempt.diff, angle, round_no, rounds, context)
     try:
         result = run_agent(client, ATTACK, user_input, ctx)
     except LLMRefusal:
@@ -113,19 +168,22 @@ def _input_key(f: VerifiedFinding) -> str:
 
 
 def run_attack(client: OpenAI, ticket: Ticket, analysis: AnalysisOutput | None, attempt: FixAttempt,
-               ctx: RunContext, rounds: int | None = None) -> AttackReport:
+               ctx: RunContext, rounds: int | None = None, previous: list[FixAttempt] = (),
+               focused: bool = False, context: dict | None = None) -> AttackReport:
     """관점별 공격 라운드를 돌리고 발견을 확인·합친다. 라운드 실패(반복 상한·응답 오류)는 기록만 하고 계속한다.
 
-    rounds: 라운드 수를 고정한다 (실행 옵션, Ablation·측정용). None이면 plan_rounds로 정한다.
+    rounds: 라운드 수를 고정한다 (실행 옵션, Ablation·측정용). None이면 plan_angles로 정한다.
+    previous·focused: 재시도에서 관점을 고르는 데 쓴다 (plan_angles). context: 미리 가져온 코드 (attack_context).
     """
-    planned, why = plan_rounds(attempt.number, rounds)
+    angles, why = plan_angles(attempt.number, previous, rounds, focused)
+    planned = len(angles)
     report = AttackReport(planned_rounds=planned, escalation=why)
-    angles = config.ATTACK_ANGLES[:planned]
     seen: set[str] = set()
     for start in range(0, planned, config.ATTACK_PARALLEL):
         batch = angles[start:start + config.ATTACK_PARALLEL]
         with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-            futures = [pool.submit(_run_round, client, ticket, analysis, attempt, ctx, angle, start + i + 1, planned)
+            futures = [pool.submit(_run_round, client, ticket, analysis, attempt, ctx, angle, start + i + 1, planned,
+                                   context)
                        for i, angle in enumerate(batch)]
             results = [f.result() for f in futures]  # 거부·토큰 상한 초과는 여기서 올라간다
         for rnd, findings in results:

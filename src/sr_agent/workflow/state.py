@@ -8,10 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 TicketType = Literal["defect", "standardize", "security"]
-Status = Literal["new", "analyzing", "fixing", "approval_pending", "human_review", "approved", "rejected"]
+Status = Literal["new", "needs_info", "analyzing", "fixing", "approval_pending", "human_review", "approved",
+                 "rejected"]
 
 
 class ReferenceImpl(BaseModel):
@@ -70,6 +71,28 @@ class Evidence(BaseModel):
     note: str
 
 
+class IntakeOutput(BaseModel):
+    """접수 검사 LLM의 판단 (F5-0). 받아들일지는 코드가 정한다 (intake.decide)."""
+
+    is_change_request: bool  # 운영 시스템의 동작을 고쳐 달라는 요청인가
+    in_domain: bool  # 대상 시스템(주문·정산) 업무와 관련 있는가
+    symptom_quote: str  # 티켓에서 그대로 옮긴 증상(요청) 문장. 없으면 빈 문자열
+    expected_behavior: str  # 올바른 동작 (티켓에 있거나 증상에서 바로 알 수 있을 때만). 없으면 빈 문자열
+    missing: list[str]  # 처리하려면 더 필요한 정보
+    reason: str
+
+
+class IntakeResult(BaseModel):
+    """접수 검사 결과. problems가 비어 있어야 받아들인다."""
+
+    accepted: bool
+    problems: list[str] = Field(default_factory=list)
+    output: IntakeOutput | None = None  # 코드 검사에서 걸리면 LLM을 부르지 않아 None
+
+
+_ANALYSIS_DEFAULTS = {"ticket_symptom": "", "symptom_check": "", "confident": True, "blocker": ""}
+
+
 class AnalysisOutput(BaseModel):
     """분석 에이전트의 최종 결과 (F5-1)."""
 
@@ -81,6 +104,18 @@ class AnalysisOutput(BaseModel):
     evidence: list[Evidence]
     history_ids: list[str]
     repro_test_path: str  # repro_tests/test_*.py
+    ticket_symptom: str  # 티켓 본문에서 그대로 옮긴 증상 문장 (코드가 티켓에 있는지 확인)
+    symptom_check: str  # 재현 테스트의 어느 단언이 그 증상을 확인하는지
+    confident: bool  # 이 함수가 티켓 증상의 원인이라고 근거로 확신하는가
+    blocker: str  # 확신하지 못하면 그 이유 (규칙 없음·여러 함수에 걸침·증상 불명확 등), 확신하면 빈 문자열
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_old_records(cls, data):
+        """v1.2 이전에 저장된 상태(재생 데이터 등)에는 새 필드가 없다. 스키마는 바꾸지 않고 불러올 때만 채운다."""
+        if isinstance(data, dict):
+            data = {**_ANALYSIS_DEFAULTS, **data}
+        return data
 
 
 class FixOutput(BaseModel):
@@ -190,8 +225,10 @@ class TicketState(BaseModel):
 
     ticket: Ticket
     status: Status = "new"
+    intake: IntakeResult | None = None  # 접수 검사 (F5-0). None이면 검사하지 않음 (E2E, v1.2 이전 실행)
     analysis: AnalysisOutput | None = None
     prediction: list[dict] = Field(default_factory=list)  # 결함 위치 예측 Top-3 + SHAP (화면용)
+    prediction_signal: dict | None = None  # 예측 신호 (분포 밖 여부, tools.predict.prediction_signal)
     repro_verified: bool = False
     analysis_tries: int = 0
     attempts: list[FixAttempt] = Field(default_factory=list)

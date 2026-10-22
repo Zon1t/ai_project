@@ -30,6 +30,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1, help="동시에 처리할 티켓 수")
     parser.add_argument("--tag", default=None, help="결과 이름 (기본: 조건으로 정함)")
     parser.add_argument("--restart", action="store_true", help="끝난 티켓도 처음부터 다시")
+    parser.add_argument("--suite", choices=["v12", "legacy"], default="v12",
+                        help="v12: 현재 시스템 (결과 이름 앞에 v12_), legacy: 5일차~v1.1 조건 (기존 결과 이름)")
     parser.add_argument("--only", default=None,
                         help="쉼표로 구분한 결함 함수(모듈.함수) 또는 결함 ID만 실행 (실패 티켓 재확인용)")
     args = parser.parse_args()
@@ -37,12 +39,15 @@ def main() -> None:
     from dotenv import load_dotenv
 
     load_dotenv(config.PROJECT_ROOT / ".env")
+    from sr_agent.ablation import SUITES
+
+    prefix, _, flags = SUITES[args.suite]
     options = RunOptions(use_predict=not args.no_predict, use_attack=not args.no_attack,
-                         attack_rounds=args.attack_rounds)
+                         attack_rounds=args.attack_rounds, **flags)
     off = [n for n, flag in (("no_predict", args.no_predict), ("no_attack", args.no_attack)) if flag]
     if args.attack_rounds is not None and not args.no_attack:
         off.append(f"r{args.attack_rounds}")
-    condition = args.tag or ("_".join(off) if off else "full")
+    condition = args.tag or prefix + ("_".join(off) if off else "full")
     tag = condition + (f"_n{args.limit}" if args.limit else "")
     only = [x.strip() for x in args.only.split(",") if x.strip()] if args.only else None
     from sr_agent.llm import LLMQuotaExceeded

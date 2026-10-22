@@ -1,0 +1,353 @@
+[
+  {
+    "case_id": "K01",
+    "source": "SR-2041",
+    "method": "discount.apply_coupon",
+    "flaw": "under_fix",
+    "description": "0원 하한(BIZ-CPN-02)만 넣고, 최소 주문 금액을 여전히 원래 주문 금액으로 판단(BIZ-CPN-01 미반영)",
+    "claim": "BIZ-CPN-01·02 반영: 쿠폰 적용 후 결제 금액이 음수가 되지 않도록 수정",
+    "rule_ids": [
+      "BIZ-CPN-01",
+      "BIZ-CPN-02"
+    ],
+    "code": "def apply_coupon(order_amount, coupon, current_amount=None):\n    # type: (int, Dict, Optional[int]) -> int\n    \"\"\"쿠폰 1장을 적용한 뒤의 결제 금액을 돌려준다.\n\n    order_amount: 쿠폰 적용 전 주문 금액\n    current_amount: 앞선 쿠폰까지 적용된 현재 금액 (첫 쿠폰이면 None)\n    \"\"\"\n    if current_amount is None:\n        current_amount = order_amount\n    if not is_coupon_applicable(order_amount, coupon):\n        return current_amount\n    discount = calc_coupon_discount(current_amount, coupon)\n    return max(0, current_amount - discount)\n",
+    "probe_method": "discount.apply_coupons",
+    "probes": [
+      [
+        120000,
+        [
+          {
+            "type": "FIXED",
+            "value": 80000,
+            "min_order": 100000
+          },
+          {
+            "type": "FIXED",
+            "value": 10000,
+            "min_order": 100000
+          }
+        ]
+      ]
+    ]
+  },
+  {
+    "case_id": "K02",
+    "source": "SR-2041",
+    "method": "discount.apply_coupon",
+    "flaw": "under_fix",
+    "description": "최소 주문 금액을 현재 금액으로 판단(BIZ-CPN-01)했지만 0원 하한(BIZ-CPN-02)이 없음",
+    "claim": "BIZ-CPN-01·02 반영: 복수 쿠폰의 최소 주문 금액을 직전 쿠폰 적용 후 금액으로 판단",
+    "rule_ids": [
+      "BIZ-CPN-01",
+      "BIZ-CPN-02"
+    ],
+    "code": "def apply_coupon(order_amount, coupon, current_amount=None):\n    # type: (int, Dict, Optional[int]) -> int\n    \"\"\"쿠폰 1장을 적용한 뒤의 결제 금액을 돌려준다.\n\n    order_amount: 쿠폰 적용 전 주문 금액\n    current_amount: 앞선 쿠폰까지 적용된 현재 금액 (첫 쿠폰이면 None)\n    \"\"\"\n    if current_amount is None:\n        current_amount = order_amount\n    if not is_coupon_applicable(current_amount, coupon):\n        return current_amount\n    discount = calc_coupon_discount(current_amount, coupon)\n    return current_amount - discount\n",
+    "probe_method": "discount.apply_coupons",
+    "probes": [
+      [
+        50000,
+        [
+          {
+            "type": "FIXED",
+            "value": 80000,
+            "min_order": 0
+          }
+        ]
+      ]
+    ]
+  },
+  {
+    "case_id": "K03",
+    "source": "SR-2041",
+    "method": "discount.apply_coupon",
+    "flaw": "regression",
+    "description": "두 규칙은 모두 고쳤지만 결제 금액을 10원 단위로 내림 (결함과 무관한 금액이 바뀜)",
+    "claim": "BIZ-CPN-01·02 반영, 결제 금액 정리",
+    "rule_ids": [
+      "BIZ-CPN-01",
+      "BIZ-CPN-02"
+    ],
+    "code": "def apply_coupon(order_amount, coupon, current_amount=None):\n    # type: (int, Dict, Optional[int]) -> int\n    \"\"\"쿠폰 1장을 적용한 뒤의 결제 금액을 돌려준다.\n\n    order_amount: 쿠폰 적용 전 주문 금액\n    current_amount: 앞선 쿠폰까지 적용된 현재 금액 (첫 쿠폰이면 None)\n    \"\"\"\n    if current_amount is None:\n        current_amount = order_amount\n    if not is_coupon_applicable(current_amount, coupon):\n        return current_amount\n    discount = calc_coupon_discount(current_amount, coupon)\n    return max(0, current_amount - discount) // 10 * 10\n",
+    "probe_method": "discount.apply_coupons",
+    "probes": [
+      [
+        12345,
+        [
+          {
+            "type": "FIXED",
+            "value": 1000,
+            "min_order": 0
+          }
+        ]
+      ]
+    ]
+  },
+  {
+    "case_id": "K04",
+    "source": "SR-2077",
+    "method": "settlement.calc_due_date",
+    "flaw": "regression",
+    "description": "utcnow·pytz를 없앴지만 UTC 시각을 한국 시간으로 바꾸지 않고 그대로 월을 판단 (KST 자정~09시 월말 경계에서 바뀜)",
+    "claim": "DEP-DT-01·DEP-TZ-01 반영: datetime.now(timezone.utc)로 교체, pytz 제거, 타입 힌트 추가",
+    "rule_ids": [
+      "DEP-DT-01",
+      "STY-01"
+    ],
+    "imports": {
+      "add": [
+        "from datetime import timezone"
+      ],
+      "remove": []
+    },
+    "code": "def calc_due_date(order_dt: datetime | None = None) -> date:\n    \"\"\"정산 지급일: 주문일(한국 시간) 기준 월말 마감 후 영업일 5일째.\n\n    order_dt: UTC naive datetime. 없으면 현재 시각.\n    \"\"\"\n    if order_dt is None:\n        order_dt = datetime.now(timezone.utc).replace(tzinfo=None)\n    local = order_dt.replace(tzinfo=timezone.utc)\n    month_end = date(local.year, local.month, date_utils.last_day_of_month(local.year, local.month))\n    return date_utils.add_business_days(month_end, config.SETTLEMENT_BUSINESS_DAYS)\n",
+    "probe_method": "settlement.calc_due_date",
+    "probes": [
+      [
+        {
+          "$datetime": "2024-01-31T16:00:00"
+        }
+      ]
+    ]
+  },
+  {
+    "case_id": "K05",
+    "source": "SR-2103",
+    "method": "customer_dao.find_by_name",
+    "flaw": "under_fix",
+    "description": "f-string은 그대로 두고 입력에서 작은따옴표만 지움 (O'Brien 같은 정상 이름을 못 찾음)",
+    "claim": "SEC-SQL-01 반영: SQL 조립 전에 위험 문자 제거",
+    "rule_ids": [
+      "SEC-SQL-01"
+    ],
+    "code": "def find_by_name(conn, name):\n    # type: (object, str) -> List[Dict]\n    \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n    safe = str(name).replace(\"'\", \"\")\n    sql = f\"SELECT * FROM customers WHERE name = '{safe}' ORDER BY id\"\n    logger.debug(\"find_by_name: %s\", sql)\n    return db.query_all(conn, sql)\n",
+    "probe_method": "customer_dao.find_by_name",
+    "probes": [
+      [
+        {
+          "$db": {
+            "customers": [
+              {
+                "name": "O'Brien",
+                "email": "o@x.com",
+                "phone": "010-1111-2222",
+                "grade": "BASIC"
+              }
+            ]
+          }
+        },
+        "O'Brien"
+      ]
+    ]
+  },
+  {
+    "case_id": "K06",
+    "source": "SR-2103",
+    "method": "customer_dao.find_by_name",
+    "flaw": "regression",
+    "description": "파라미터 바인딩으로 바꿨지만 = 대신 LIKE '%이름%'으로 바꿔 부분 일치도 돌려줌",
+    "claim": "SEC-SQL-01 반영: 파라미터 바인딩(?)으로 교체",
+    "rule_ids": [
+      "SEC-SQL-01"
+    ],
+    "code": "def find_by_name(conn, name):\n    # type: (object, str) -> List[Dict]\n    \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n    sql = \"SELECT * FROM customers WHERE name LIKE ? ORDER BY id\"\n    return db.query_all(conn, sql, (f\"%{name}%\",))\n",
+    "probe_method": "customer_dao.find_by_name",
+    "probes": [
+      [
+        {
+          "$db": {
+            "customers": [
+              {
+                "name": "김민수",
+                "email": "a@x.com",
+                "phone": "010-1111-2222",
+                "grade": "BASIC"
+              }
+            ]
+          }
+        },
+        "김민"
+      ]
+    ]
+  },
+  {
+    "case_id": "K07",
+    "source": "SR-2103",
+    "method": "customer_dao.find_by_name",
+    "flaw": "regression",
+    "description": "파라미터 바인딩으로 바꾸면서 이름 앞뒤 공백을 지움 (공백이 다른 이름도 같은 사람으로 찾음)",
+    "claim": "SEC-SQL-01 반영: 파라미터 바인딩(?)으로 교체, 입력 정리",
+    "rule_ids": [
+      "SEC-SQL-01"
+    ],
+    "code": "def find_by_name(conn, name):\n    # type: (object, str) -> List[Dict]\n    \"\"\"이름으로 고객 목록 조회 (동명이인 포함, id 순).\"\"\"\n    sql = \"SELECT * FROM customers WHERE name = ? ORDER BY id\"\n    return db.query_all(conn, sql, (name.strip(),))\n",
+    "probe_method": "customer_dao.find_by_name",
+    "probes": [
+      [
+        {
+          "$db": {
+            "customers": [
+              {
+                "name": "김민수",
+                "email": "a@x.com",
+                "phone": "010-1111-2222",
+                "grade": "BASIC"
+              }
+            ]
+          }
+        },
+        " 김민수"
+      ]
+    ]
+  },
+  {
+    "case_id": "K08",
+    "source": "tax.calc_late_penalty",
+    "method": "tax.calc_late_penalty",
+    "flaw": "under_fix",
+    "description": "지연 일수 0일만 0원으로 막고 음수 일수는 그대로 계산",
+    "claim": "지연 일수가 없으면 가산세 0원",
+    "rule_ids": [],
+    "code": "def calc_late_penalty(tax, days_late):\n    \"\"\"납부지연가산세 (1일 10만분의 22), 10원 미만 절사.\"\"\"\n    if tax <= 0 or days_late == 0:\n        return 0\n    return truncate_won(tax * days_late * LATE_PENALTY_RATE // 100000)\n",
+    "probe_method": "tax.calc_late_penalty",
+    "probes": [
+      [
+        1000000,
+        -3
+      ]
+    ]
+  },
+  {
+    "case_id": "K09",
+    "source": "tax.calc_simplified_vat",
+    "method": "tax.calc_simplified_vat",
+    "flaw": "under_fix",
+    "description": "부가가치율이 상한을 넘을 때만 오류로 막고, 하한보다 작을 때는 여전히 0원",
+    "claim": "범위를 벗어난 부가가치율은 오류로 처리",
+    "rule_ids": [],
+    "code": "def calc_simplified_vat(sales, value_added_rate):\n    \"\"\"간이과세 세액 = 공급대가 x 업종별 부가가치율 x 10%, 10원 미만 절사.\"\"\"\n    if value_added_rate > VALUE_ADDED_RATE_MAX:\n        raise ValueError(\"부가가치율 범위 오류: %d\" % value_added_rate)\n    if value_added_rate < VALUE_ADDED_RATE_MIN:\n        return 0\n    added = sales * value_added_rate // 100\n    return truncate_won(added * VAT_RATE // 100)\n",
+    "probe_method": "tax.calc_simplified_vat",
+    "probes": [
+      [
+        1000000,
+        1
+      ]
+    ]
+  },
+  {
+    "case_id": "K10",
+    "source": "notification.should_retry",
+    "method": "notification.should_retry",
+    "flaw": "regression",
+    "description": "재시도할 수 없는 오류는 고쳤지만 최대 횟수 비교를 <에서 <=로 바꿔 한 번 더 재시도",
+    "claim": "재시도할 수 없는 오류 코드는 재시도하지 않음",
+    "rule_ids": [],
+    "code": "def should_retry(error_code, attempt):\n    \"\"\"attempt: 지금까지 시도한 재시도 횟수.\"\"\"\n    if not is_retryable(error_code):\n        return False\n    return attempt <= MAX_RETRY_COUNT\n",
+    "probe_method": "notification.should_retry",
+    "probes": [
+      [
+        "TIMEOUT",
+        3
+      ]
+    ]
+  },
+  {
+    "case_id": "K11",
+    "source": "seller.calc_commission_rate",
+    "method": "seller.calc_commission_rate",
+    "flaw": "regression",
+    "description": "영세 사업자 우대를 고쳤지만 수수료율 하한(MIN_COMMISSION_RATE)을 빼 버림",
+    "claim": "영세 사업자 우대는 천분율 고정 차감",
+    "rule_ids": [],
+    "code": "def calc_commission_rate(grade, small_business=False):\n    \"\"\"판매 수수료율(천분율). 등급 우대·영세 사업자 우대 후 하한 적용.\"\"\"\n    rate = BASE_COMMISSION_RATE - PREFERRED_DISCOUNTS.get(grade, 0)\n    if small_business:\n        rate -= SMALL_BIZ_DISCOUNT\n    return rate\n",
+    "probe_method": "seller.calc_commission_rate",
+    "probes": [
+      [
+        "VIP",
+        true
+      ],
+      [
+        "PLATINUM",
+        true
+      ],
+      [
+        "GOLD",
+        true
+      ]
+    ]
+  },
+  {
+    "case_id": "K12",
+    "source": "review.calc_average_rating",
+    "method": "review.calc_average_rating",
+    "flaw": "under_fix",
+    "description": "계산식은 고쳤지만 반올림을 내장 round()로 바꿔 x.x5에서 half-up이 아니라 내림처럼 동작",
+    "claim": "평균 평점 계산식 수정 (소수 첫째 자리 반올림)",
+    "rule_ids": [],
+    "code": "def calc_average_rating(ratings):\n    # type: (List[int]) -> float\n    \"\"\"평균 평점. 소수 둘째 자리에서 반올림(half-up)해 첫째 자리까지 표시.\n\n    예: 4.05 -> 4.1, 4.04 -> 4.0. 리뷰가 없으면 0.0.\n    \"\"\"\n    if not ratings:\n        return 0.0\n    total = sum(validate_rating(r) for r in ratings)\n    return round(total / len(ratings), 1)\n",
+    "probe_method": "review.calc_average_rating",
+    "probes": [
+      [
+        [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          5
+        ]
+      ]
+    ]
+  },
+  {
+    "case_id": "K13",
+    "source": "payment.mask_card_number",
+    "method": "payment.mask_card_number",
+    "flaw": "regression",
+    "description": "문자열 연산은 고쳤지만 가운데 * 개수를 8개로 고정 (16자리가 아닌 카드 번호에서 길이가 바뀜)",
+    "claim": "카드 번호 마스킹 수정",
+    "rule_ids": [],
+    "code": "def mask_card_number(card_number):\n    digits = card_number.replace(\"-\", \"\").replace(\" \", \"\")\n    return digits[:4] + \"*\" * 8 + digits[-4:]\n",
+    "probe_method": "payment.mask_card_number",
+    "probes": [
+      [
+        "3782-822463-10005"
+      ]
+    ]
+  },
+  {
+    "case_id": "K14",
+    "source": "tax.split_mixed_items",
+    "method": "tax.split_mixed_items",
+    "flaw": "under_fix",
+    "description": "알 수 없는 과세 유형은 오류로 막았지만 소문자(tax_free)는 대문자로 바꿔 받아들임",
+    "claim": "알 수 없는 과세 유형은 오류로 처리",
+    "rule_ids": [],
+    "code": "def split_mixed_items(items):\n    # type: (List[Dict]) -> Dict[str, int]\n    \"\"\"과세(TAXABLE)·면세(TAX_FREE) 상품 금액 합계 분리.\"\"\"\n    result = {\"TAXABLE\": 0, \"TAX_FREE\": 0}\n    for item in items:\n        tax_type = str(item.get(\"tax_type\", \"TAXABLE\")).upper()\n        if tax_type not in result:\n            raise ValueError(\"알 수 없는 과세 유형: %s\" % tax_type)\n        result[tax_type] += item[\"price\"] * item[\"quantity\"]\n    return result\n",
+    "probe_method": "tax.split_mixed_items",
+    "probes": [
+      [
+        [
+          {
+            "price": 1000,
+            "quantity": 1,
+            "tax_type": "tax_free"
+          }
+        ]
+      ]
+    ]
+  }
+]

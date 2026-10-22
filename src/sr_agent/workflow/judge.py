@@ -14,6 +14,9 @@
    불일치는 원본이 정답과 같았으면 회귀, 원본도 달랐으면 미달로 센다. 결함 영역 밖에서 원본과 같아야 한다는
    PRD 7.2 조건을 포함한다 (영역 밖 = 원본과 정답이 같은 입력). 명세가 없으면 미평가(None).
 5. 공격 입력 재판정: 공격 에이전트가 제안한 입력 전부에서 수정본 출력 = 정답 구현 출력 (정답 구현이 있을 때).
+6. 티켓 증상 연결 (v1.2): 분석이 인용한 증상 문장이 티켓에 글자 그대로 있고, 분석이 확신함.
+
+모든 유형 공통 (v1.2): 접수 검사를 거쳤으면 받아들인 티켓인지 (접수 검사 결과는 저장된 값을 확인만 한다).
 """
 
 import ast
@@ -26,8 +29,17 @@ from sr_agent.tools.checks import module_findings, orphaned_import_lines
 from sr_agent.tools.code import _split_method, find_function, module_path
 from sr_agent.tools.execution import _validate_inputs, run_diff, run_tests
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, remove_tree
+from sr_agent.workflow.intake import quoted_from
 from sr_agent.workflow.reference import build_reference
-from sr_agent.workflow.state import AttackReport, JudgeCheck, JudgeResult, JudgeSpec, Ticket
+from sr_agent.workflow.state import (
+    AnalysisOutput,
+    AttackReport,
+    IntakeResult,
+    JudgeCheck,
+    JudgeResult,
+    JudgeSpec,
+    Ticket,
+)
 
 
 def _units(tree: ast.Module, skip: str) -> tuple[dict[str, str], list[str]]:
@@ -341,11 +353,37 @@ def judge_security(ws: Workspace, method: str, spec: JudgeSpec | None,
     return _result(checks)
 
 
+def intake_check(intake: IntakeResult) -> JudgeCheck:
+    """접수 검사에서 받아들인 티켓인가 (저장된 결과를 확인만 한다. LLM을 다시 부르지 않음)."""
+    quote = intake.output.symptom_quote if intake.output else ""
+    detail = f"증상: {quote}" if intake.accepted else "; ".join(intake.problems)
+    return JudgeCheck(name="intake_accepted", passed=intake.accepted, detail=detail)
+
+
+def symptom_check(ticket: Ticket, analysis: AnalysisOutput) -> JudgeCheck:
+    """분석이 티켓 증상을 그대로 인용했고 확신하는가. v1.2 이전 분석(인용 없음)은 미평가."""
+    name = "ticket_symptom_linked"
+    if not analysis.ticket_symptom:
+        return JudgeCheck(name=name, passed=None, detail="분석 결과에 티켓 증상 인용 없음 (v1.2 이전 실행)")
+    problems = []
+    if not quoted_from(analysis.ticket_symptom, ticket):
+        problems.append(f"인용한 증상이 티켓에 없음: {analysis.ticket_symptom!r}")
+    if not analysis.confident:
+        problems.append(f"분석 확신 불가: {analysis.blocker}")
+    detail = "; ".join(problems) or f"증상 {analysis.ticket_symptom!r} → {analysis.symptom_check}"
+    return JudgeCheck(name=name, passed=not problems, detail=detail)
+
+
 def judge_ticket(ws: Workspace, ticket: Ticket, method: str, repro_tests: list[str],
-                 attack: AttackReport | None = None) -> JudgeResult:
-    """티켓 유형별 판정 (F5-4)."""
+                 attack: AttackReport | None = None, intake: IntakeResult | None = None,
+                 analysis: AnalysisOutput | None = None) -> JudgeResult:
+    """티켓 유형별 판정 (F5-4). 접수 검사·분석 결과가 있으면 티켓과의 연결도 확인한다."""
     if ticket.type == "defect":
-        return judge_defect(ws, method, repro_tests, ticket.judge, attack)
-    if ticket.type == "standardize":
-        return judge_standardize(ws, method, ticket.judge, attack)
-    return judge_security(ws, method, ticket.judge, attack)
+        result = judge_defect(ws, method, repro_tests, ticket.judge, attack)
+    elif ticket.type == "standardize":
+        result = judge_standardize(ws, method, ticket.judge, attack)
+    else:
+        result = judge_security(ws, method, ticket.judge, attack)
+    extra = ([intake_check(intake)] if intake is not None else []) + \
+        ([symptom_check(ticket, analysis)] if analysis is not None and ticket.type == "defect" else [])
+    return _result(extra + result.checks) if extra else result

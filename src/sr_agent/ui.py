@@ -15,13 +15,16 @@ from pathlib import Path
 from sr_agent import config
 from sr_agent.tools.code import function_source, module_rel
 from sr_agent.tools.workspace import remove_tree
+from sr_agent.workflow.intake import rule_problems
 from sr_agent.workflow.state import Decision, Ticket, TicketState
 
 STAGES = ("분석", "수정", "공격", "판정", "승인")
 TYPE_LABELS = {"defect": "결함 수정", "standardize": "코드 표준화", "security": "보안 진단 조치"}
-STATUS_LABELS = {"new": "대기", "analyzing": "분석 중", "fixing": "수정 중", "approval_pending": "승인 대기",
-                 "human_review": "사람 검토", "approved": "승인됨", "rejected": "반려됨"}
+STATUS_LABELS = {"new": "대기", "needs_info": "보완 요청", "analyzing": "분석 중", "fixing": "수정 중",
+                 "approval_pending": "승인 대기", "human_review": "사람 검토", "approved": "승인됨",
+                 "rejected": "반려됨"}
 CHECK_LABELS = {
+    "intake_accepted": "접수 검사 통과 (수정 요청 맞음)", "ticket_symptom_linked": "티켓 증상과 재현 테스트 연결",
     "repro_original_fails": "재현 테스트가 원본에서 실패", "repro_patched_passes": "재현 테스트가 수정본에서 통과",
     "existing_tests_pass": "기존 테스트 통과", "change_scope": "변경 범위 (대상 함수만)",
     "reference_property": "정답 구현과 출력 동일 (Hypothesis)",
@@ -32,6 +35,91 @@ CHECK_LABELS = {
     "attack_regressions_preserved": "공격이 찾은 회귀 입력에서 원본과 동일",  # 4일차 재생 데이터용
     "hidden_tests_pass": "숨은 정답 테스트 통과 (E2E)",
 }
+# 판정 조건 묶음과 한 줄 설명 (화면에서 "판정 조건 6/6"이 무엇인지 보이게)
+CHECK_GROUPS = (
+    ("티켓", ("intake_accepted", "ticket_symptom_linked")),
+    ("재현 테스트", ("repro_original_fails", "repro_patched_passes")),
+    ("기존 동작", ("existing_tests_pass", "change_scope", "hidden_tests_pass")),
+    ("정답·원본과 비교", ("reference_property", "behavior_preserved", "normal_preserved", "attack_neutralized")),
+    ("공격 결과 재확인", ("attack_findings_rechecked", "attack_regressions_preserved")),
+    ("규칙 검사", ("deprecated_zero", "style_zero", "security_zero")),
+)
+CHECK_HELP = {
+    "intake_accepted": "접수 검사에서 수정 요청으로 받아들인 티켓인지",
+    "ticket_symptom_linked": "분석이 티켓에 적힌 증상을 그대로 인용하고, 재현 테스트가 그 증상을 확인하는지",
+    "repro_original_fails": "결함을 드러내는 재현 테스트가 고치기 전 코드에서 실패하는지 (결함이 실제로 있음)",
+    "repro_patched_passes": "같은 재현 테스트가 고친 코드에서 통과하는지 (결함이 고쳐짐)",
+    "existing_tests_pass": "대상 프로젝트의 기존 테스트 전체가 고친 코드에서 통과하는지",
+    "change_scope": "대상 함수와 같은 파일의 import만 바뀌었는지 (다른 함수·파일·테스트는 그대로)",
+    "hidden_tests_pass": "에이전트에게 숨긴 정답 테스트가 통과하는지 (평가 전용)",
+    "reference_property": "Hypothesis로 만든 입력 200개에서 고친 코드 결과 = 사람이 쓴 정답 구현 결과",
+    "behavior_preserved": "Hypothesis 입력 200개에서 고친 코드 결과 = 원본 결과 (동작 완전 보존)",
+    "normal_preserved": "정상 입력 200개에서 고친 코드 결과 = 원본 결과",
+    "attack_neutralized": "시나리오에 정한 공격 입력(인젝션 등)이 무력화되는지",
+    "attack_findings_rechecked": "공격 에이전트가 만든 입력을 판정이 다시 실행해, 정답(표준화는 원본)과 같은지. "
+                                 "공격 에이전트의 판단이 아니라 코드가 비교한 결과",
+    "attack_regressions_preserved": "공격이 찾은 회귀 입력에서 원본과 같은지 (4일차 기록)",
+    "deprecated_zero": "고친 함수에 지원 종료 API가 남아 있지 않은지",
+    "style_zero": "고친 함수에 팀 스타일 위반이 없는지",
+    "security_zero": "고친 함수에 bandit·사내 보안 규칙 위반이 없는지",
+}
+
+
+def finding_verdict(attempt, finding) -> str:
+    """공격 발견 하나를 판정이 다시 실행한 결과: 실제 문제 | 문제 아님 | 미평가 | 실행 불가.
+
+    공격 에이전트의 미달·회귀는 주장일 뿐이고, 판정이 같은 입력을 정답(표준화는 원본)과 비교해 정한다.
+    """
+    check = _attempt_check(attempt, "attack_findings_rechecked")
+    if check is None or check.passed is None:
+        return "미평가"
+    try:
+        from sr_agent.tools.attack import input_key
+
+        key = input_key(finding.method, json.loads(finding.input_json))
+    except (ValueError, TypeError):
+        return "실행 불가"
+    return "실제 문제" if key in check.data.get("failed_keys", []) else "문제 아님"
+
+
+def _attempt_check(attempt, name: str):
+    if attempt is None or attempt.judge is None:
+        return None
+    return next((c for c in attempt.judge.checks if c.name == name), None)
+
+
+def attack_summary(state: TicketState) -> str:
+    """마지막 시도의 공격 결과 한 줄: 공격이 낸 입력 수와 판정이 실제 문제로 확인한 수."""
+    last = state.attempts[-1] if state.attempts else None
+    if last is None or last.attack is None:
+        return "공격 단계 없음"
+    proposed = len(last.attack.findings)
+    if not proposed:
+        return "공격이 문제를 찾지 못함"
+    check = _attempt_check(last, "attack_findings_rechecked")
+    if check is None or check.passed is None:
+        return f"공격이 제기한 문제 {proposed}건 (정답 구현이 없어 자동 재확인 못함 — 공격 로그에서 직접 확인)"
+    return f"공격이 제기한 문제 {proposed}건 → 판정이 다시 실행해 실제 문제 {check.data.get('mismatches', 0)}건"
+
+
+def format_result(result: dict | None) -> str:
+    """run_diff 결과 {"ok", "value" | "exception"}를 사람이 읽는 한 줄로."""
+    if not result:
+        return "-"
+    if result.get("ok"):
+        return json.dumps(result.get("value"), ensure_ascii=False)
+    return f"예외: {result.get('exception', '')}"
+
+
+def grouped_checks(checks: list) -> list[tuple[str, list]]:
+    """판정 조건을 묶음별로 (묶음 이름, [조건]). 묶음에 없는 조건은 '기타'로."""
+    by_name = {c.name: c for c in checks}
+    groups = [(label, [by_name[n] for n in names if n in by_name]) for label, names in CHECK_GROUPS]
+    known = {n for _, names in CHECK_GROUPS for n in names}
+    rest = [c for c in checks if c.name not in known]
+    return [(label, items) for label, items in groups + [("기타", rest)] if items]
+
+
 _TICKET_ID = re.compile(r"^SR-\d{4}$")
 
 
@@ -158,6 +246,8 @@ def register_ticket(ticket_type: str, title: str, body: str, method: str | None 
         raise ValueError(f"제목+본문은 최대 {config.MAX_TICKET_CHARS}자")
     if ticket_type != "defect" and not (method and re.match(r"^\w+\.\w+$", method)):
         raise ValueError("코드 표준화·보안 유형은 대상 함수(모듈.함수)가 필요함")
+    if problems := rule_problems(title, body):  # 접수 검사의 코드 조건 (LLM 판단은 실행할 때)
+        raise ValueError("; ".join(problems))
     existing = all_tickets()
     numbers = [int(t.ticket_id[3:]) for t in existing if _TICKET_ID.match(t.ticket_id)]
     ticket = Ticket(ticket_id=f"SR-{max([9000, *numbers]) + 1:04d}", type=ticket_type, title=title, body=body,
@@ -181,6 +271,45 @@ def register_demo(ticket: Ticket) -> Ticket:
 
 def live_state_path(ticket_id: str) -> Path:
     return config.RUNS_DIR / ticket_id / config.STATE_FILENAME
+
+
+def is_registered(ticket_id: str) -> bool:
+    """화면에서 등록했거나 불러온 티켓인가 (시연 S1~S3는 data/scenarios.json에 고정)."""
+    return any(t.ticket_id == ticket_id for t in registered_tickets())
+
+
+def tickets_with_results() -> list[str]:
+    """실시간 실행 결과(runs/<티켓ID>/state.json)가 남아 있는 티켓."""
+    known = {t.ticket_id for t in all_tickets()}
+    return [tid for tid in known if live_state_path(tid).is_file()]
+
+
+def delete_results(ticket_id: str, remove_ticket: bool = False) -> dict:
+    """실시간 실행 결과를 지운다: 작업본·상태(runs/<ID>/)와 실행 로그(runs/<ID>-*.jsonl).
+
+    remove_ticket이면 등록 목록에서도 뺀다 (화면에서 등록·불러온 티켓만). 재생 데이터(data/replay)는 건드리지 않는다.
+    반환: {"dirs": 지운 폴더 수, "logs": 지운 로그 수, "ticket_removed": bool}
+    """
+    if not re.match(config.TICKET_ID_PATTERN, ticket_id):
+        raise ValueError(f"티켓 ID 형식 오류: {ticket_id}")
+    root = config.RUNS_DIR / ticket_id
+    state = TicketState.load(root / config.STATE_FILENAME)
+    run_ids = set(state.run_ids) if state else set()
+    logs = [p for p in config.RUNS_DIR.glob(f"{ticket_id}-*.jsonl")
+            if p.stem in run_ids or re.fullmatch(rf"{re.escape(ticket_id)}-\d{{8}}-\d{{6}}", p.stem)]
+    for p in logs:
+        p.unlink()
+    dirs = 0
+    if root.is_dir():
+        remove_tree(root)
+        dirs = 1
+    removed = False
+    if remove_ticket and is_registered(ticket_id):
+        rows = [t.model_dump(exclude_none=True) for t in registered_tickets() if t.ticket_id != ticket_id]
+        registry_path().write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+                                   newline="\n")
+        removed = True
+    return {"dirs": dirs, "logs": len(logs), "ticket_removed": removed}
 
 
 def load_state(path: Path) -> TicketState | None:
@@ -392,7 +521,8 @@ def load_replay(ticket_id: str, reset: bool = False) -> tuple[TicketState, Path,
     return TicketState.load(work), work, events
 
 
-STEP_LABELS = {"analysis": "분석", "fix": "수정", "attack": "공격", "judge": "판정", "workflow": "완료"}
+STEP_LABELS = {"intake": "접수", "analysis": "분석", "fix": "수정", "attack": "공격", "judge": "판정",
+               "workflow": "완료"}
 TOOL_LABELS = {
     "predict_fault_location": "결함 위치 예측", "search_history": "유사 이력 검색", "search_rules": "사내 규칙 검색",
     "get_callers": "호출부 조회", "get_coverage": "커버리지 조회", "read_method": "코드 읽기",
@@ -444,13 +574,13 @@ def run_summary(events: list[dict]) -> dict:
     fix_count = 0
     for event in events:
         step = event.get("step")
-        if step not in ("analysis", "fix", "attack", "judge") or \
-                event.get("kind") not in ("llm", "tool", "verify", "round", "judge"):
+        if step not in ("intake", "analysis", "fix", "attack", "judge") or \
+                event.get("kind") not in ("llm", "tool", "verify", "round", "judge", "intake"):
             continue  # 판정 뒤 공격 이력 저장(memory) 같은 부수 기록은 구간을 만들지 않는다
         if not segments or segments[-1]["step"] != step:
             if step == "fix":
                 fix_count += 1
-            attempt = None if step == "analysis" else max(fix_count, 1)
+            attempt = None if step in ("intake", "analysis") else max(fix_count, 1)
             segments.append({"step": step, "stage": STEP_LABELS[step], "attempt": attempt, "turns": 0, "tools": 0,
                              "start": _ts(event), "end": _ts(event), "result": ""})
         seg = segments[-1]
@@ -462,6 +592,9 @@ def run_summary(events: list[dict]) -> dict:
             seg["tools"] += 1
             if step == "fix" and event.get("tool") == "apply_patch" and not event.get("error"):
                 seg["result"] = "패치 적용"
+        elif kind == "intake":
+            seg["result"] = "수정 요청으로 받아들임" if event.get("accepted") else \
+                "보완 요청: " + "; ".join(event.get("problems", []))
         elif kind == "verify" and step == "analysis":
             seg["result"] = "재현 테스트가 원본에서 실패함을 확인" if event.get("ok") else \
                 f"재현 확인 실패: {event.get('detail', '')}"
@@ -488,9 +621,11 @@ def run_summary(events: list[dict]) -> dict:
 
 def event_message(event: dict) -> str | None:
     """실행 로그 한 줄 → 화면에 보일 진행 메시지 (보일 필요 없는 줄은 None)."""
-    step = {"analysis": "분석", "fix": "수정", "attack": "공격", "judge": "판정", "workflow": "완료"}.get(
-        event.get("step"), event.get("step"))
+    step = STEP_LABELS.get(event.get("step"), event.get("step"))
     kind = event.get("kind")
+    if kind == "intake":
+        return "[접수 검사] " + ("받아들임" if event.get("accepted") else
+                                 "보완 요청: " + "; ".join(event.get("problems", [])))
     if event.get("angle") and kind in ("llm", "tool"):  # 동시에 도는 공격 라운드 구분
         step += "·" + next((lb for n, lb, _ in config.ATTACK_ANGLES if n == event["angle"]), event["angle"])
     if kind == "llm":

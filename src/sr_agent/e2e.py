@@ -17,6 +17,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from sr_agent import config
@@ -215,6 +216,9 @@ def run_case(ticket: Ticket, mutant: dict, runs_dir: Path, client, options: RunO
     prepared = prepare(ticket, mutant, runs_dir)
     # 숨긴 테스트는 판정에 넣지 않는다 (판정 통과 뒤 따로 돌려 회귀 누출을 센다)
     judge = prepared.judge.model_copy(update={"hidden_tests": []})
+    # 접수 검사(F5-0)는 끈다: 생성한 티켓이라 걸러 낼 대상이 아니다.
+    # 재시도 공격 축소·코드 미리 넣기는 options를 따른다 (측정 묶음 legacy·v12, sr_agent.ablation.SUITES)
+    options = replace(options, use_intake=False)
     state = run_ticket(prepared.model_copy(update={"judge": judge}), client, runs_dir=runs_dir, options=options,
                        progress=lambda m: print(f"  [{ticket.ticket_id}] {m}", flush=True))
     seconds = time.monotonic() - started

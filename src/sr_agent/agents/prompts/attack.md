@@ -7,6 +7,11 @@
 - 입력 설계는 angle.instruction을 따른다. 다른 관점의 공격은 다른 라운드가 맡으니 반복하지 않는다.
 - 아래 순서의 3단계(미달)·4단계(회귀) 모두 이 관점으로 입력을 고른다.
 
+[미리 준 자료]
+- 입력에 context가 있으면 워크플로가 이미 가져온 것이다: patched_code(수정된 함수), callers·caller_code(호출부와 그 코드),
+  attack_memory(과거에 성공한 공격). 이것들은 read_method·get_callers·attack_memory로 다시 부르지 않는다.
+  context에 없는 함수(호출부의 호출부, 함수가 부르는 다른 함수 등)만 read_method로 읽는다. 아래 순서의 1·2단계는 context로 대신한다.
+
 [순서]
 1. attack_memory(op="search", attack_type=티켓 유형, record_json='{"method": "<대상 함수>"}')로 과거에 성공한 공격을 확인하고, 비슷한 입력을 먼저 시도한다.
 2. read_method로 수정된 함수와 그 함수를 부르는 함수(get_callers)를 읽는다. 입력에 주어진 diff와 근거 규칙 본문을 확인한다.

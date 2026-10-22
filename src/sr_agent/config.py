@@ -37,6 +37,9 @@ SPLIT_PATH = TICKETS_DIR / "split.json"
 EVAL_RESULTS_DIR = PROJECT_ROOT / "eval" / "results"
 REPLAY_DIR = DATA_DIR / "replay"  # 시연용 사전 실행 결과 (PRD 9장)
 REPLAY_EVENT_DELAY_S = 0.04  # 재생 모드에서 진행 메시지 사이 간격
+UI_POLL_S = 2  # 실시간 모드: 백그라운드 실행 중 화면이 진행 상황을 다시 읽는 간격
+# 실시간 모드 비밀번호를 담은 환경 변수 (.env). 값이 있으면 실시간 모드(API 호출)에 들어갈 때 묻는다. 없으면 묻지 않음
+LIVE_PASSWORD_ENV = "REDFIX_LIVE_PASSWORD"
 
 # 재현성 (분할, Hypothesis, 학습)
 SEED = 42
@@ -61,6 +64,13 @@ ATTACK_ROUNDS = 3  # 수정 시도 1회당 공격 라운드 수 (라운드마다
 ATTACK_ROUNDS_WITH_HISTORY = 5  # 이 티켓의 이전 시도가 판정에서 실패했을 때 (재시도)
 MAX_FAILED_ATTACK_INPUTS = 5  # 판정이 걸러 낸 공격 입력 중 재시도 입력에 넘길 개수
 ATTACK_PARALLEL = 3  # 동시에 실행하는 라운드 수. 한 묶음에서 확인된 발견이 나오면 다음 묶음은 건너뛴다
+# 재시도 공격 (v1.2, RunOptions.focused_retry): 5관점을 모두 다시 돌리지 않고, 이전 시도에서 판정이 실제 문제로 확인한
+# 입력을 찾은 관점 + 아직 쓰지 않은 관점으로 이 수만큼만 (한 묶음). 판정은 이전 시도의 공격 입력도 모두 다시 실행한다
+ATTACK_RETRY_FOCUSED_ROUNDS = 3
+# 공격·분석 입력에 미리 넣는 코드 (v1.2, RunOptions.prefetch_context): 라운드마다 같은 코드를 다시 읽던 도구 호출을 줄임
+PREFETCH_MAX_CALLERS = 3  # 수정한 함수의 호출부 중 코드를 넣을 개수
+PREFETCH_CODE_CHARS = 4000  # 함수 하나의 코드 길이 상한
+ATTACK_KPI_CASES = 10  # 공격 탐지율 KPI: 불완전 패치 건수 (PRD 2장, data/attack_kpi/patches.json)
 ATTACK_ANGLES = (  # 라운드 순서대로 하나씩. (이름, 화면 표시, 공격 에이전트 지시)
     ("boundary", "경계값", "근거 규칙이 정한 기준값의 바로 아래·같은 값·바로 위, 0·최댓값 근처를 공격한다."),
     ("types", "타입·빈 값", "None, 빈 문자열·빈 리스트, 음수, 아주 큰 수, 따옴표·공백·특수문자가 든 문자열처럼 "
@@ -126,6 +136,14 @@ KPI_TOP3 = 0.80
 PREDICT_MAX_TOP_K = 10
 PREDICT_REASONS = 3  # SHAP 근거 개수 (F3-2)
 MAX_TICKET_CHARS = 4000  # 입력 가드: 티켓 본문 길이 상한 (PRD 7.5)
+# 예측 신호 (분포 밖 티켓 표시, PRD N5①): 평가 분할 티켓의 백분위로 임계값을 정한다 (python -m sr_agent.ml.calibrate)
+PREDICTION_SIGNAL_PATH = MODELS_DIR / "fault_ranker_signal.json"
+PREDICTION_SIGNAL_PERCENTILE = 1  # 평가 분할에서 이 백분위 아래면 "낮음" (정상 티켓의 약 1%만 걸림)
+
+# 접수 검사 (F5-0): 수정 요청으로 볼 수 없는 티켓은 분석 전에 "보완 요청"으로 돌려보낸다
+INTAKE_MIN_BODY_CHARS = 8  # 공백을 뺀 본문 최소 길이 (코드 검사, LLM 호출 전)
+INTAKE_MIN_QUOTE_CHARS = 6  # 티켓에서 인용한 증상 문장의 최소 길이 (공백 제외)
+INTAKE_REASONING_EFFORT = "medium"
 
 # RAG (F4-1, F4-2)
 HISTORY_COLLECTION = "history"  # 장애·조치 이력 (학습 분할 결함만)

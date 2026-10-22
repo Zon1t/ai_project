@@ -7,6 +7,7 @@ KPI 표는 PRD 2장의 8개 지표를 같은 형식(지표 · 목표 · 측정 �
 """
 
 import json
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -19,11 +20,27 @@ CONDITIONS: dict[str, tuple[str, RunOptions]] = {
     "no_predict": ("예측 도구 끔", RunOptions(use_predict=False)),
     "no_attack": ("공격 단계 끔", RunOptions(use_attack=False)),
 }
+# 측정 묶음: 결과 파일 접두어, 설명, 조건마다 덧씌우는 실행 옵션.
+# legacy = 5일차~v1.1에 잰 조건 (e2e_full 등 기존 결과), v12 = 재시도 공격 축소·코드 미리 넣기를 켠 현재 시스템.
+# 접수 검사는 두 묶음 모두 끈다 (생성 티켓, e2e.run_case)
+SUITES: dict[str, tuple[str, str, dict]] = {
+    "legacy": ("", "5일차~v1.1 조건", {"focused_retry": False, "prefetch_context": False}),
+    "v12": ("v12_", "v1.2 (재시도 공격 축소·코드 미리 넣기)", {}),
+}
+
+
+def suite_conditions(suite: str = "legacy") -> dict[str, tuple[str, RunOptions]]:
+    """묶음의 조건별 (결과 태그, 설명, 실행 옵션)을 기본 조건 이름으로."""
+    prefix, _, flags = SUITES[suite]
+    return {t: (prefix + t, label, replace(opts, **flags)) for t, (label, opts) in CONDITIONS.items()}
+
+
 DEMO_TICKETS = ("SR-2041", "SR-2077", "SR-2103")
 KPI_TARGET_MINUTES = 15
 KPI_CITATION = 0.80
 KPI_SOLVED = 0.60
 KPI_LEAKS = 1
+KPI_ATTACK_DETECTION = 0.80
 
 
 def _pct(v: float | None) -> str:
@@ -33,6 +50,12 @@ def _pct(v: float | None) -> str:
 def load_condition(tag: str, results_dir: Path | None = None) -> dict | None:
     path = (results_dir or config.EVAL_RESULTS_DIR) / f"e2e_{tag}.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def load_attack_kpi(results_dir: Path | None = None) -> dict | None:
+    """공격 탐지율 측정 요약 (eval/results/attack_kpi.json, sr_agent.attack_kpi)."""
+    path = (results_dir or config.EVAL_RESULTS_DIR) / "attack_kpi.json"
+    return json.loads(path.read_text(encoding="utf-8"))["summary"] if path.is_file() else None
 
 
 def load_fault_top3(results_dir: Path | None = None) -> float | None:
@@ -105,7 +128,8 @@ def _delta(a: dict, b: dict, key: str, fmt) -> str:
     return fmt(a[key] - b[key])
 
 
-def kpi_rows(results: dict[str, dict | None], fault_top3: float | None, demos: list[dict]) -> list[dict]:
+def kpi_rows(results: dict[str, dict | None], fault_top3: float | None, demos: list[dict],
+             attack: dict | None = None) -> list[dict]:
     """PRD 2장 KPI 8개: 지표, 목표, 측정 방법, 결과, 달성(True/False/None=미측정)."""
     full, no_pred, no_att = (_summary(results.get(t)) for t in ("full", "no_predict", "no_attack"))
     rows = []
@@ -126,9 +150,17 @@ def kpi_rows(results: dict[str, dict | None], fault_top3: float | None, demos: l
                            + (f" (E2E 평균 {full['seconds_mean'] / 60:.1f}분)" if full.get("seconds_mean") else "")),
                  "ok": None if worst is None else worst <= KPI_TARGET_MINUTES * 60})
 
-    rows.append({"name": "공격 에이전트 탐지율", "target": "80% 이상",
-                 "method": "일부러 불완전하게 만든 패치 10건 중 미달·회귀 탐지 수",
-                 "value": "미측정 (불완전 패치 10건 작성 예정)", "ok": None})
+    if attack and attack["n"]:
+        rate = attack["detected"] / attack["n"]
+        flaws = attack.get("by_flaw", {})
+        detail = ", ".join(f"{label} {flaws[k]['detected']}/{flaws[k]['n']}" for k, label in
+                           (("under_fix", "미달"), ("regression", "회귀")) if flaws.get(k, {}).get("n"))
+        value, ok = f"{attack['detected']}/{attack['n']} ({rate:.0%}; {detail})", rate >= KPI_ATTACK_DETECTION
+    else:
+        value, ok = "미측정 (python -m eval.run_attack_kpi)", None
+    rows.append({"name": "공격 에이전트 탐지율", "target": f"{KPI_ATTACK_DETECTION:.0%} 이상",
+                 "method": "일부러 불완전하게 만든 패치 10건 중 미달·회귀 탐지 수 (판정이 공격 입력을 재실행해 확인)",
+                 "value": value, "ok": ok})
 
     demo_cited = [d["cited"] for d in demos if d["cited"] is not None]
     rate = full.get("citation_rate")
@@ -175,14 +207,15 @@ def kpi_table(rows: list[dict]) -> list[str]:
             *[f"| {r['name']} | {r['target']} | {r['method']} | {r['value']} | {marks[r['ok']]} |" for r in rows]]
 
 
-def render_report(results: dict[str, dict | None], fault_top3: float | None, demos: list[dict]) -> str:
+def render_report(results: dict[str, dict | None], fault_top3: float | None, demos: list[dict],
+                  attack: dict | None = None) -> str:
     """KPI 표 + Ablation 비교표 + 조건별 티켓 결과 (Markdown)."""
     price = config.PRICE_PER_MTOK
     lines = ["# KPI와 Ablation (PRD 2장, F7-3)", "",
              "- E2E: 홀드아웃 결함 20건(운영 담당자 티켓), 조건마다 공격 이력 분리, "
              "숨긴 테스트는 판정 통과 뒤 따로 실행",
              f"- 가격 가정(100만 토큰당): 입력 ${price['input']}, 캐시 ${price['cached']}, 출력 ${price['output']}", "",
-             "## KPI (PRD 2장)", "", *kpi_table(kpi_rows(results, fault_top3, demos)), "",
+             "## KPI (PRD 2장)", "", *kpi_table(kpi_rows(results, fault_top3, demos, attack)), "",
              "## Ablation: 조건별 비교 (F7-3)", "", *ablation_table(results), ""]
     lines += ["## 조건별 티켓 결과", "",
               "| 티켓 | 정답 함수 | " + " | ".join(CONDITIONS[t][0] for t in CONDITIONS) + " |",
@@ -208,16 +241,19 @@ def render_report(results: dict[str, dict | None], fault_top3: float | None, dem
     return "\n".join(lines) + "\n"
 
 
-def write_report(results_dir: Path | None = None, replay_dir: Path | None = None) -> Path:
-    """eval/results/kpi_ablation.{md,json}을 쓴다."""
+def write_report(results_dir: Path | None = None, replay_dir: Path | None = None, suite: str = "legacy") -> Path:
+    """eval/results/kpi_ablation{_v12}.{md,json}을 쓴다 (묶음마다 따로)."""
     out = results_dir or config.EVAL_RESULTS_DIR
-    results = {t: load_condition(t, out) for t in CONDITIONS}
+    prefix = SUITES[suite][0]
+    results = {t: load_condition(prefix + t, out) for t in CONDITIONS}
     fault_top3 = load_fault_top3(out)
     demos = demo_results(replay_dir)
-    path = out / "kpi_ablation.md"
-    path.write_text(render_report(results, fault_top3, demos), encoding="utf-8", newline="\n")
-    data = {"kpi": kpi_rows(results, fault_top3, demos), "demos": demos,
+    attack = load_attack_kpi(out)
+    name = "kpi_ablation" + (f"_{prefix.rstrip('_')}" if prefix else "")
+    path = out / f"{name}.md"
+    path.write_text(render_report(results, fault_top3, demos, attack), encoding="utf-8", newline="\n")
+    data = {"kpi": kpi_rows(results, fault_top3, demos, attack), "demos": demos, "attack_kpi": attack,
             "conditions": {t: _summary(results[t]) for t in CONDITIONS}}
-    (out / "kpi_ablation.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+    (out / f"{name}.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                                           encoding="utf-8", newline="\n")
     return path

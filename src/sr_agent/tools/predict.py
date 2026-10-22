@@ -70,8 +70,19 @@ class FaultLocator:
         return X[0][:, self._cols]
 
     def predict(self, ticket_text: str, top_k: int = 3) -> list[dict]:
+        return self.predict_with_signal(ticket_text, top_k)[0]
+
+    def raw_signal(self, X: np.ndarray, scores: np.ndarray) -> dict:
+        """분포 밖 판단에 쓰는 값: 1위 점수, 후보 중 최대 임베딩·TF-IDF 유사도."""
+        return {"top1": round(float(scores.max()), 4),
+                "emb_max": round(float(X[:, self.features.index("emb_sim")].max()), 4),
+                "tfidf_max": round(float(X[:, self.features.index("tfidf_sim")].max()), 4)}
+
+    def predict_with_signal(self, ticket_text: str, top_k: int = 3) -> tuple[list[dict], dict]:
+        """(Top-k 결과, 예측 신호). 신호는 평가 분할로 정한 임계값과 비교한 결과를 붙인다."""
         X = self.features_for(ticket_text)
         scores = self.ranker.predict(X)
+        signal = judge_signal(self.raw_signal(X, scores))
         top = np.argsort(-scores, kind="stable")[:top_k]
         contributions = np.asarray(self.explainer.shap_values(X[top]))
         results = []
@@ -89,7 +100,31 @@ class FaultLocator:
                     "contribution": round(float(contributions[rank, f]), 4),
                 } for f in order],
             })
-        return results
+        return results, signal
+
+
+SIGNAL_LABELS = {"top1": "1위 점수", "emb_max": "티켓-코드 의미 유사도 최댓값",
+                 "tfidf_max": "티켓-코드 단어 겹침 최댓값"}
+
+
+def load_signal_thresholds(path: Path | None = None) -> dict | None:
+    """평가 분할로 정한 임계값 {"top1": .., "emb_max": .., ...}. 파일이 없으면 None."""
+    path = Path(path or config.PREDICTION_SIGNAL_PATH)
+    return json.loads(path.read_text(encoding="utf-8"))["thresholds"] if path.is_file() else None
+
+
+def judge_signal(raw: dict, thresholds: dict | None = None) -> dict:
+    """값 하나라도 임계값보다 낮으면 low=True (학습한 티켓 분포 밖: 업무와 무관하거나 너무 모호한 티켓).
+
+    1·2위 점수 차는 쓰지 않는다: 평가 분할에서 정상 티켓도 차이가 작은 경우가 많고, 엉뚱한 티켓은 오히려 컸다.
+    임계값 파일이 없으면 low=None (판단 안 함).
+    """
+    thresholds = thresholds if thresholds is not None else load_signal_thresholds()
+    if not thresholds:
+        return {**raw, "low": None, "reasons": []}
+    reasons = [f"{SIGNAL_LABELS[k]} {raw[k]:.3f} < 기준 {v:.3f}" for k, v in thresholds.items()
+               if k in raw and raw[k] < v]
+    return {**raw, "low": bool(reasons), "reasons": reasons, "thresholds": thresholds}
 
 
 _locator: FaultLocator | None = None
@@ -120,3 +155,13 @@ def predict_fault_location(ticket_text: str, top_k: int = 3) -> list[dict] | dic
         return get_locator().predict(ticket_text, top_k)
     except Exception as e:  # noqa: BLE001 - 도구는 예외 대신 오류 값을 돌려준다
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+def predict_with_signal(ticket_text: str, top_k: int = 3) -> tuple[list[dict] | dict, dict | None]:
+    """워크플로용: (predict_fault_location과 같은 결과, 예측 신호). 실패하면 ({"error"}, None)."""
+    if not isinstance(ticket_text, str) or not ticket_text.strip() or len(ticket_text) > config.MAX_TICKET_CHARS:
+        return predict_fault_location(ticket_text, top_k), None
+    try:
+        return get_locator().predict_with_signal(ticket_text, top_k)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}, None

@@ -1,7 +1,9 @@
-"""고정 워크플로 그래프 (PRD 7.1, F5-1 ~ F5-5). 프레임워크 없이 직접 짠다.
+"""고정 워크플로 그래프 (PRD 7.1, F5-0 ~ F5-5). 프레임워크 없이 직접 짠다.
 
-분석 → 재현 확인(코드) → 수정 → 공격 → 판정(코드) ─통과→ 승인 대기
-  재현 테스트가 원본에서 실패하지 않으면 분석을 한 번 더 (config.MAX_ANALYSIS_TRIES)
+접수 검사 → 분석 → 재현 확인(코드) → 수정 → 공격 → 판정(코드) ─통과→ 승인 대기
+  접수 검사에서 수정 요청으로 볼 수 없으면 "보완 요청"으로 멈춘다 (F5-0)
+  분석 에이전트가 확신하지 못하면(confident=false) 수정하지 않고 사람 검토로 넘긴다 (PRD N5②③)
+  재현 테스트가 원본에서 실패하지 않거나 인용한 증상이 티켓에 없으면 분석을 한 번 더 (config.MAX_ANALYSIS_TRIES)
   판정 실패 시 실패 내용을 붙여 수정 재시도 (첫 시도 + config.MAX_PATCH_RETRIES회), 초과하면 사람 검토
 노드 사이에는 구조화 결과만 넘기고, 노드가 끝날 때마다 state.json에 저장한다 (중단 후 이어서 실행).
 공격 발견은 코드로 다시 확인해 기록하고 재시도 입력에 붙인다. 통과·실패는 판정 노드가 정한다.
@@ -17,18 +19,19 @@ from openai import OpenAI
 from sr_agent import config
 from sr_agent.agents.context import BudgetExceeded, RunContext
 from sr_agent.agents.loop import AgentStopped, run_agent
-from sr_agent.agents.specs import ANALYSIS, FIX, analysis_input, fix_input
+from sr_agent.agents.specs import ANALYSIS, FIX, analysis_input, fix_input, prediction_context
 from sr_agent.llm import LLMError, LLMRefusal
 from sr_agent.tools.code import function_source, module_rel, read_method
 from sr_agent.tools.execution import run_tests
-from sr_agent.tools.predict import predict_fault_location
+from sr_agent.tools.predict import predict_with_signal
 from sr_agent.tools.workspace import Workspace, compare_hashes, hash_tree, prepare_workspace
-from sr_agent.workflow.attack import run_attack, save_confirmed
+from sr_agent.workflow.attack import attack_context, run_attack, save_confirmed
+from sr_agent.workflow.intake import check_ticket, quoted_from
 from sr_agent.workflow.judge import judge_ticket
 from sr_agent.workflow.reference import build_reference
 from sr_agent.workflow.state import AttackReport, FixAttempt, Ticket, TicketState
 
-FINAL = {"approval_pending", "human_review", "approved", "rejected"}
+FINAL = {"needs_info", "approval_pending", "human_review", "approved", "rejected"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,10 @@ class RunOptions:
     use_predict: bool = True  # 분석 에이전트에 predict_fault_location 제공
     use_attack: bool = True  # 공격 단계 실행
     attack_rounds: int | None = None  # 공격 라운드 수 고정 (None이면 기본 3, 재시도면 5)
+    use_intake: bool = True  # 접수 검사 (E2E는 생성한 티켓이라 끈다: 5일차 결과와 조건을 맞춤)
+    # v1.2 효율 개선. E2E는 5일차부터 이어 온 재측정이 끝날 때까지 끈다 (조건 섞임 방지, e2e.run_case)
+    focused_retry: bool = True  # 재시도 공격: 문제를 찾았던 관점 + 새 관점 3개만 (끄면 5관점 전부)
+    prefetch_context: bool = True  # 공격·분석 입력에 코드·호출부·공격 이력·예측 후보를 미리 넣음
 
 
 def _analysis_spec(options: RunOptions):
@@ -123,19 +130,37 @@ def _function_versions(ws: Workspace, method: str) -> tuple[str, str]:
     return read(ws.original), read(ws.work)
 
 
+def symptom_problem(ticket: Ticket, analysis) -> str | None:
+    """분석이 인용한 증상 문장이 티켓에 글자 그대로 있는지 (없으면 다시 분석할 설명)."""
+    if quoted_from(analysis.ticket_symptom, ticket):
+        return None
+    return ("ticket_symptom이 티켓 본문에 없음: 티켓 제목·본문에서 증상 문장을 글자 그대로 복사한다 "
+            f"(요약·번역·고쳐 쓰기 금지, 공백 제외 {config.INTAKE_MIN_QUOTE_CHARS}자 이상). "
+            f"보낸 값: {analysis.ticket_symptom!r}")
+
+
 def _analysis_node(client: OpenAI, state: TicketState, ctx: RunContext, progress: Callable[[str], None],
                    options: RunOptions) -> None:
     feedback = None
     if not state.prediction:  # 화면·평가용 (분석이 실패해도 모델 정확도를 집계할 수 있게 먼저 저장)
-        prediction = predict_fault_location(state.ticket.text, 3)
+        prediction, state.prediction_signal = predict_with_signal(state.ticket.text, 3)
         state.prediction = prediction if isinstance(prediction, list) else []
+    signal = state.prediction_signal if options.use_predict else None
+    candidates = (prediction_context(ctx.ws, state.prediction)
+                  if options.prefetch_context and options.use_predict and state.prediction else None)
     while state.analysis_tries < config.MAX_ANALYSIS_TRIES:
         state.analysis_tries += 1
         progress(f"분석 에이전트 실행 ({state.analysis_tries}/{config.MAX_ANALYSIS_TRIES})")
-        result = run_agent(client, _analysis_spec(options), analysis_input(state.ticket, feedback), ctx)
+        result = run_agent(client, _analysis_spec(options),
+                           analysis_input(state.ticket, feedback, signal, candidates), ctx)
         state.analysis = result.output
+        if not state.analysis.confident:  # 억지로 고치지 않는다 (PRD N5③)
+            ctx.log.write(step="analysis", kind="verify", ok=False,
+                          detail=f"분석 에이전트 확신 불가: {state.analysis.blocker}")
+            raise _HumanReview(f"분석 확신 불가: {state.analysis.blocker or state.analysis.reason}")
         state.analysis.repro_test_path = resolve_repro_path(ctx.ws, state.analysis.repro_test_path)
-        problem = verify_repro(ctx.ws, state.analysis.repro_test_path, state.ticket)
+        problem = symptom_problem(state.ticket, state.analysis)
+        problem = problem or verify_repro(ctx.ws, state.analysis.repro_test_path, state.ticket)
         if problem is None and isinstance(read_method(ctx.ws, state.analysis.final_method), dict):
             problem = f"final_method가 대상 프로젝트에 없음: {state.analysis.final_method}"
         ctx.log.write(step="analysis", kind="verify", ok=problem is None,
@@ -183,7 +208,9 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         attempt.before_code, attempt.after_code = _function_versions(ctx.ws, method)
         if options.use_attack:
             progress("공격 에이전트 실행 (관점별 라운드)")
-            attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx, options.attack_rounds)
+            context = attack_context(ctx.ws, state.ticket, method) if options.prefetch_context else None
+            attempt.attack = run_attack(client, state.ticket, analysis, attempt, ctx, options.attack_rounds,
+                                        previous=state.attempts, focused=options.focused_retry, context=context)
             report = attempt.attack
             more = f", 늘린 이유: {report.escalation}" if report.escalation else ""
             progress(f"공격 라운드 {len(report.rounds)}/{report.planned_rounds}회{more} → "
@@ -191,7 +218,8 @@ def _fix_and_judge(client: OpenAI, state: TicketState, ctx: RunContext, progress
         else:
             progress("공격 단계 생략 (Ablation) → 판정 (코드)")
         attempt.judge = judge_ticket(ctx.ws, state.ticket, method, repro,
-                                     judge_attack_inputs(state.attempts, attempt.attack))
+                                     judge_attack_inputs(state.attempts, attempt.attack),
+                                     intake=state.intake, analysis=analysis)
         ctx.log.write(step="judge", kind="judge", attempt=number, passed=attempt.judge.passed,
                       failed=[c.name for c in attempt.judge.failures()])
         if attempt.attack:
@@ -229,6 +257,14 @@ def run_ticket(
     ctx.budget.used = state.tokens_used
     state.run_ids.append(ctx.log.run_id)
     try:
+        if options.use_intake and state.intake is None:
+            progress("접수 검사 (수정 요청인지 확인)")
+            state.intake = check_ticket(client, ticket, ctx)
+            state.save(ws.state_path)
+        if state.intake is not None and not state.intake.accepted:
+            state.status = "needs_info"
+            state.human_review_reason = "접수 보완 요청: " + "; ".join(state.intake.problems)
+            return state
         if ticket.type == "defect" and not state.repro_verified:
             state.status = "analyzing"
             state.save(ws.state_path)
