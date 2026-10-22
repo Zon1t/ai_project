@@ -165,7 +165,7 @@ def _replay_app(dirs, state: TicketState) -> AppTest:
 
 def test_app_replay_renders_and_approves(dirs):
     at = _replay_app(dirs, _state())
-    assert at.main.title[0].value.startswith("SR-2041")
+    assert at.main.header[0].value.startswith("SR-2041")
     assert len(at.tabs) == 4 and [t.label.split(": ")[-1] for t in at.tabs] == ["결함 위치", "근거", "패치 diff",
                                                                                  "공격 로그"]
     assert any("판정 통과" in s.value for s in at.subheader)

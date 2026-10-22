@@ -125,8 +125,10 @@ def sidebar() -> tuple[bool, Ticket | None]:
         if (pending := st.session_state.pop("_select_ticket", None)) in by_id:  # 방금 불러온 시연 케이스 선택
             st.session_state["ticket"] = pending
         captions = [" · ".join(x for x in (by_id[i].scenario, _status_of(i, replay)) if x) for i in ids]
-        selected = st.radio("티켓", ids, key="ticket", label_visibility="collapsed", captions=captions,
-                            format_func=lambda tid: f"{tid}  {ui.TYPE_LABELS[by_id[tid].type]}")
+        box = st.container(height=config.SIDEBAR_LIST_HEIGHT if len(ids) > config.SIDEBAR_LIST_ROWS else "content",
+                           border=False)
+        selected = box.radio("티켓", ids, key="ticket", label_visibility="collapsed", captions=captions,
+                             format_func=lambda tid: f"{tid}  {ui.TYPE_LABELS[by_id[tid].type]}")
 
         if not replay:
             demo_loader()
@@ -193,10 +195,8 @@ def demo_panel(ticket: Ticket) -> None:
     except ValueError:
         return
     with st.expander(f"시연 케이스 {case['case_id']} · {case['label']}", expanded=True, icon=":material/science:"):
-        st.markdown(case["goal"])
-        st.markdown("**확인할 것**")
+        st.caption(case["goal"])
         st.markdown("\n".join(f"{i}. {c}" for i, c in enumerate(case["check"], 1)))
-        st.caption("판단을 마치면 맨 아래 '정답 확인'으로 맞았는지 봅니다.")
 
 
 # ---------------- 상단: 티켓, 진행 단계, 실행 ----------------
@@ -204,7 +204,7 @@ def demo_panel(ticket: Ticket) -> None:
 def header(ticket: Ticket, state: TicketState | None) -> None:
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
-        st.title(f"{ticket.ticket_id} {ticket.title}")
+        st.header(f"{ticket.ticket_id} {ticket.title}")
         if st.button("사용 설명서", icon=":material/help:", type="tertiary", help="RedFix 사용 설명서 열기"):
             guide_dialog()
     status = state.status if state else "new"
@@ -216,8 +216,7 @@ def header(ticket: Ticket, state: TicketState | None) -> None:
         badges.append(_badge(ticket.method, "gray", ":material/function:"))
     st.markdown(" ".join(badges))
     with st.container(border=True):
-        st.caption("접수 내용")
-        st.markdown(ticket.body)
+        st.markdown(f":gray[접수 내용]  \n{ticket.body}")
 
 
 def _stage_line(items: list[tuple[str, str]]) -> str:
@@ -257,9 +256,9 @@ def replay_progress(ticket: Ticket, events: list[dict], stage_slot) -> None:
     st.toast("재생 완료 — 아래 처리 과정에서 단계별 요약을 볼 수 있습니다.", icon=":material/check:")
 
 
-def run_controls(replay: bool, ticket: Ticket, events: list[dict], stage_slot) -> bool:
-    """실행·재생 버튼. 상태가 바뀌었으면 True."""
-    row = st.container(horizontal=True, vertical_alignment="center")
+def run_controls(row, replay: bool, ticket: Ticket, events: list[dict], stage_slot) -> bool:
+    """진행 단계 줄 오른쪽의 실행·재생 버튼. 상태가 바뀌었으면 True."""
+    row.space("stretch")
     if replay:
         play = row.button("진행 과정 재생", icon=":material/play_arrow:", type="primary")
         reset = row.button("승인·반려 기록 초기화", icon=":material/restart_alt:", type="tertiary")
@@ -281,7 +280,6 @@ def run_controls(replay: bool, ticket: Ticket, events: list[dict], stage_slot) -
     run = row.button("실행", icon=":material/play_arrow:", type="primary")
     restart = row.toggle("처음부터 다시", help="저장된 상태와 작업본을 지우고 처음부터 실행합니다.")
     has_results = ui.live_state_path(ticket.ticket_id).is_file() or ui.is_registered(ticket.ticket_id)
-    row.space("stretch")  # 삭제는 실행 버튼과 떨어진 오른쪽 끝에 (잘못 누르지 않게, 누르면 확인 창)
     if row.button("삭제", icon=":material/delete:", disabled=not has_results, key="delete_results",
                   help="이 티켓의 실행 결과(작업본·상태·로그)를 지웁니다. 등록한 티켓은 목록에서도 뺄 수 있습니다."
                   if has_results else "지울 실행 결과가 없습니다."):
@@ -689,13 +687,12 @@ def approval(state: TicketState, state_path: Path) -> bool:
                 st.error(d.reason, title=f"반려됨 · {d.decided_at}", icon=":material/block:")
             return False
         allowed = ui.can_approve(state)
-        st.markdown("**담당자 승인**", help=HELP["approval"])
-        row = st.container(horizontal=True, vertical_alignment="center")
-        if row.button("승인 후 반영", icon=":material/check:", type="primary", disabled=not allowed,
-                      help=None if allowed else "판정을 통과한 승인 대기 티켓만 승인할 수 있습니다"):
+        st.markdown("**담당자 결정**", help=HELP["approval"])
+        if st.button("승인 후 반영", icon=":material/check:", type="primary", disabled=not allowed, width="stretch",
+                     help=None if allowed else "판정을 통과한 승인 대기 티켓만 승인할 수 있습니다"):
             ui.decide(state, state_path, approve=True)
             return True
-        with row.popover("반려", icon=":material/undo:"):
+        with st.popover("반려", icon=":material/undo:", width="stretch"):
             reason = st.text_area("반려 사유", key=f"reason-{state.ticket.ticket_id}",
                                   placeholder="예: 경계값(정확히 10만 원) 처리 근거 부족")
             if st.button("반려 확정", type="primary", width="stretch"):
@@ -720,36 +717,58 @@ def main() -> None:
         state = TicketState.load(state_path)
         events = ui.load_events(state) if state else []
     header(ticket, state)
-    if ticket.demo_case:
-        demo_panel(ticket)
     if not replay and _jobs().running(ticket.ticket_id):
         running_panel(ticket)
         return
-    stage_slot = st.empty()
+    row = st.container(horizontal=True, vertical_alignment="center")
+    stage_slot = row.empty()
     stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)))
-    if run_controls(replay, ticket, events, stage_slot):
+    if run_controls(row, replay, ticket, events, stage_slot):
         st.rerun()
     stage_slot.markdown(_stage_line(ui.stage_status(state) if state else _initial_stages(ticket)))
     if state is None:
+        if ticket.demo_case:
+            demo_panel(ticket)
         st.info("아직 실행하지 않은 티켓입니다. 실행을 누르세요.", icon=":material/info:")
         return
     summary = ui.run_summary(events)
-    verdict(state, summary)
-    process(events, summary)
-    tabs = st.tabs([":material/my_location: 결함 위치", ":material/menu_book: 근거",
-                    ":material/difference: 패치 diff", ":material/swords: 공격 로그"])
-    with tabs[0]:
-        tab_location(state)
-    with tabs[1]:
-        tab_evidence(state)
-    with tabs[2]:
-        tab_diff(state)
-    with tabs[3]:
-        tab_attack(state)
-    if approval(state, state_path):
-        st.rerun()
-    if ticket.demo_case:
+    left, right = st.columns([3, 1], gap="large")
+    with right:  # 담당자 결정은 스크롤하지 않아도 보이게 오른쪽 위에
+        if decision_panel(state, state_path, replay):
+            st.rerun()
+    with left:
+        verdict(state, summary)
+        process(events, summary)
+        tabs = st.tabs([":material/my_location: 결함 위치", ":material/menu_book: 근거",
+                        ":material/difference: 패치 diff", ":material/swords: 공격 로그"])
+        with tabs[0]:
+            tab_location(state)
+        with tabs[1]:
+            tab_evidence(state)
+        with tabs[2]:
+            tab_diff(state)
+        with tabs[3]:
+            tab_attack(state)
+
+
+APPROVAL_CHECKS = (  # 사용 설명서 5장 "승인 전 확인 목록"
+    "패치 diff: 대상 함수만, 의도한 부분만 바뀌었는지",
+    "근거: 인용한 규칙이 이 SR에 맞는지",
+    "미평가 조건: 자동으로 못 본 부분을 직접 봤는지",
+    "재현 테스트: 기대값이 업무 규칙과 맞는지",
+)
+
+
+def decision_panel(state: TicketState, state_path: Path, replay: bool) -> bool:
+    """오른쪽 열: 승인·반려, (시연 케이스) 정답 확인과 확인할 것, 승인 전 확인 목록. 결정했으면 True."""
+    changed = approval(state, state_path)
+    if state.ticket.demo_case:
         answer_section(state, state_path, replay)
+        demo_panel(state.ticket)
+    elif not state.decision:
+        with st.expander("승인 전 확인", icon=":material/checklist:"):
+            st.markdown("\n".join(f"- {c}" for c in APPROVAL_CHECKS))
+    return changed
 
 
 def answer_section(state: TicketState, state_path: Path, replay: bool) -> None:

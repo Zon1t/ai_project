@@ -38,6 +38,8 @@ EVAL_RESULTS_DIR = PROJECT_ROOT / "eval" / "results"
 REPLAY_DIR = DATA_DIR / "replay"  # 시연용 사전 실행 결과 (PRD 9장)
 REPLAY_EVENT_DELAY_S = 0.04  # 재생 모드에서 진행 메시지 사이 간격
 UI_POLL_S = 2  # 실시간 모드: 백그라운드 실행 중 화면이 진행 상황을 다시 읽는 간격
+SIDEBAR_LIST_ROWS = 8  # 사이드바 티켓이 이보다 많으면 목록 안에서만 스크롤
+SIDEBAR_LIST_HEIGHT = 420  # 그때 목록 높이(px)
 # 실시간 모드 비밀번호를 담은 환경 변수 (.env). 값이 있으면 실시간 모드(API 호출)에 들어갈 때 묻는다. 없으면 묻지 않음
 LIVE_PASSWORD_ENV = "REDFIX_LIVE_PASSWORD"
 
